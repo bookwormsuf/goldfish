@@ -449,6 +449,11 @@ insert into topics (slug, label) values
 grant usage on schema public to service_role;
 grant select, insert, update, delete on all tables in schema public to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to service_role;
+alter default privileges in schema public
+  grant usage, select on sequences to service_role;
 ```
 
 *Added during Step 1 build*: the grant block above wasn't in the original pin.
@@ -456,6 +461,14 @@ Current Supabase projects don't auto-expose new tables to `service_role`
 (`arwd` privileges are withheld by default now), so without it every query
 from an Edge Function fails with Postgres error `42501`. This is a mechanical
 consequence of D6 (service role, no RLS), not a new design decision.
+
+The plain `grant ... on all tables` only covers tables that exist at the
+moment it runs, so a Step 1 review caught that any table added by a later
+migration would hit the same `42501` bug. The `alter default privileges`
+statements make the grant standing for anything created afterward by the
+`postgres` role (which is what migrations run as) — but not for a table
+created by hand in the dashboard, which would need the explicit block
+repeated.
 
 ### `0002_search.sql`
 

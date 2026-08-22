@@ -119,3 +119,12 @@ insert into topics (slug, label) values
 grant usage on schema public to service_role;
 grant select, insert, update, delete on all tables in schema public to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+-- The grants above only cover tables that exist right now. Migrations run as
+-- `postgres`, so this makes service_role's access standing for any table a
+-- later migration creates (but not one created by hand in the dashboard —
+-- repeat the explicit grant block above if that ever happens).
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to service_role;
+alter default privileges in schema public
+  grant usage, select on sequences to service_role;
