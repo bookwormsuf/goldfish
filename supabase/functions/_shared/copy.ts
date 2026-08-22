@@ -54,3 +54,26 @@ export const copy = {
   btnPrev: () => `◀ Prev`,
   btnNext: () => `Next ▶`,
 };
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Section 6: "Article message format" — one format, used everywhere (digest,
+// search results, opened-from-list). Parse mode HTML. Description line is
+// omitted entirely when null; the blank separator line stays either way.
+export function articleMessageHtml(article: {
+  title: string;
+  description: string | null;
+  topics: string;
+  url: string;
+}): string {
+  const lines = [`<b>${escapeHtml(article.title)}</b>`];
+  if (article.description) {
+    lines.push(escapeHtml(article.description));
+  }
+  lines.push("");
+  lines.push(escapeHtml(article.topics));
+  lines.push(escapeHtml(article.url));
+  return lines.join("\n");
+}

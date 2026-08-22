@@ -390,9 +390,10 @@ deno_version = 2
 # header check in D4, not Supabase's own JWT verification.
 verify_jwt = false
 
-# [functions.daily-digest] added in step 3, once the function exists.
+[functions.daily-digest]
 # Invoked by pg_cron via net.http_post with the service role key as a
-# bearer token, not a Supabase JWT, so it will also need verify_jwt = false.
+# bearer token (0003_cron.sql, step 9), not a Supabase JWT.
+verify_jwt = false
 
 [analytics]
 enabled = true

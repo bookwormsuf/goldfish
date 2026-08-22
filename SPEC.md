@@ -241,12 +241,26 @@ select * from ranked where rn = 1 order by score desc limit 3;
 Higher score wins. The `ln` compresses age so a one-year-old article is favoured but
 a fresh one can still be picked. Do not replace this with `order by saved_at`.
 
+*Added during Step 3 build*: this query needs a window function over a CTE,
+which PostgREST (what `supabase-js` talks to) can't express — there's no way
+to run it as a `.from(...)` chain. `SUPABASE_DB_URL` is auto-injected into
+Edge Functions specifically for this case (confirmed against Supabase's own
+docs), so `daily-digest` connects directly with the `jsr:@db/postgres` driver
+and runs this SQL verbatim rather than wrapping it in a stored Postgres
+function. Note: `id` comes back from that driver as a native `bigint`, which
+neither `JSON.stringify` nor a `supabase-js` insert can serialize — cast it to
+`Number` immediately after the query, before it touches anything else.
+
 **D20.** Three separate messages, one per article. A header message
 (`Morning. Three for you.`) is sent first. Each article message carries its own
 inline keyboard and is recorded in `sent_messages` with `kind = 'article'`.
 
 **D21.** If fewer than three unread links exist, send what there is and append the
 short-pool line. If zero, send the empty line and write no delivery row.
+
+*Interpretation used in Step 3*: "append" reads as its own trailing message
+after the last article message, consistent with the header also being sent
+as a separate message rather than folded into the first article's text.
 
 **D22.** No liveness check on links at send time. Dead links are sent as-is.
 
