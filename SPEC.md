@@ -99,6 +99,12 @@ injected automatically and must not be set manually.
 `sendMessage`, `sendDocument`, `answerCallbackQuery`, `editMessageReplyMarkup`,
 `setMessageReaction`, `getFile`. No Bot API framework.
 
+*Added during Step 7 build*: `editMessageText` was also needed, to turn a `/topics`
+menu message into a paginated topic-list page in place (D30) — `editMessageReplyMarkup`
+only edits the keyboard, not the text. A `/review` pass caught that this 7th method
+was added without pinning it here the way every other gap in this build was; noting
+it now. The list above is otherwise still closed.
+
 **D2.** The webhook returns `200 OK` immediately on receipt, before doing any work.
 All processing happens inside `EdgeRuntime.waitUntil()`.
 
@@ -256,15 +262,19 @@ select * from ranked where rn = 1 order by score desc limit 3;
 Higher score wins. The `ln` compresses age so a one-year-old article is favoured but
 a fresh one can still be picked. Do not replace this with `order by saved_at`.
 
-*Added during Step 3 build*: this query needs a window function over a CTE,
-which PostgREST (what `supabase-js` talks to) can't express — there's no way
-to run it as a `.from(...)` chain. `SUPABASE_DB_URL` is auto-injected into
-Edge Functions specifically for this case (confirmed against Supabase's own
-docs), so `daily-digest` connects directly with the `jsr:@db/postgres` driver
-and runs this SQL verbatim rather than wrapping it in a stored Postgres
-function. Note: `id` comes back from that driver as a native `bigint`, which
-neither `JSON.stringify` nor a `supabase-js` insert can serialize — cast it to
-`Number` immediately after the query, before it touches anything else.
+*Added during Step 3 build, revised after the Step 7 review*: this query needs
+a window function over a CTE, which PostgREST (what `supabase-js` talks to)
+can't express — there's no way to run it as a `.from(...)` chain. The original
+Step 3 build reached for a direct Postgres connection (`SUPABASE_DB_URL` +
+`jsr:@db/postgres`) to run this SQL verbatim, which worked but needed a manual
+`bigint`→`Number` cast and a whole second driver with its own connection
+lifecycle. A `/review` pass after Step 7 pointed out that Step 7 had already
+solved the identical PostgREST-can't-express-this problem more simply: wrap
+the query in a stored Postgres function and call it via `.rpc()`. This SQL is
+now `select_digest_candidates(target_user_id uuid)` in `0001_init.sql`,
+called from `daily-digest` with `db.rpc(...)` — same verbatim SQL, no extra
+dependency, no connection to manage, and no `bigint` problem since PostgREST's
+own JSON encoding handles it.
 
 **D20.** Three separate messages, one per article. A header message
 (`Morning. Three for you.`) is sent first. Each article message carries its own
@@ -348,11 +358,19 @@ Ordering: **unread before read/skipped, then `saved_at` descending within each g
 recorded in `sent_messages` with `kind='topic_list'` and a `payload` of
 `{"topic_id": n, "offset": n, "article_ids": [...]}` so a numeric reply can resolve.
 
-*Added during Step 7 build*: implementation notes, none of them new decisions:
-- **`search_articles(q text)` hardcodes the default user id** inside the function
-  body rather than taking it as a second parameter — D28 pins the signature as one
-  argument, and this is still a single-user app (D6). Mirrors `DEFAULT_USER_ID` in
-  `_shared/db.ts`.
+*Added during Step 7 build, corrected after the Step 7 review*: implementation
+notes, none of them new decisions:
+- **`search_articles`'s SQL is pinned verbatim in section 4** (`### 0002_search.sql`).
+  The original Step 7 build didn't check section 4 and shipped a rewritten version —
+  different return columns, a different join structure, and no `saved_at` tie-breaker
+  in the `order by`. A `/review` pass caught this as an unauthorized rewrite of a
+  pinned query; `0002_search.sql` now matches section 4 exactly. It needed no user-id
+  filter or parameter at all — being single-user (D6), the pinned SQL simply doesn't
+  scope by user, and neither does the fixed version.
+- **`grant execute on function search_articles(text) to service_role`** isn't in
+  section 4's pinned SQL either, but is necessary — same `42501` pattern as
+  `0001_init.sql`'s grant block (Step 1's addendum above). Left undocumented at first;
+  noting it here now, same as that one was.
 - **D30's ordering (unread before read/skipped, then `saved_at` desc) runs
   client-side**, not in SQL. PostgREST's `.order()` only takes column names, not a
   `CASE` expression, so `_shared/browse.ts` fetches a topic's full article list and

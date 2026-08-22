@@ -128,3 +128,37 @@ alter default privileges in schema public
   grant select, insert, update, delete on tables to service_role;
 alter default privileges in schema public
   grant usage, select on sequences to service_role;
+
+-- D19's selection query, verbatim, wrapped in a stored function so
+-- daily-digest can run it over PostgREST via .rpc() instead of a direct
+-- Postgres connection. Do not replace the body with `order by saved_at`.
+create or replace function select_digest_candidates(target_user_id uuid)
+returns setof articles
+language sql
+stable
+as $$
+  with candidates as (
+    select a.*,
+           power(
+             random(),
+             1.0 / (1.0 + ln(1.0 + extract(epoch from (now() - a.saved_at)) / 86400.0))
+           ) as score
+    from articles a
+    where a.user_id = target_user_id
+      and a.status = 'unread'
+      and a.kind = 'link'
+  ),
+  ranked as (
+    select *,
+           row_number() over (partition by coalesce(domain, '') order by score desc) as rn
+    from candidates
+  )
+  select id, user_id, kind, url, url_key, domain, storage_path, title,
+         description, fetch_ok, status, saved_at, resolved_at, search_vector
+  from ranked
+  where rn = 1
+  order by score desc
+  limit 3;
+$$;
+
+grant execute on function select_digest_candidates(uuid) to service_role;
