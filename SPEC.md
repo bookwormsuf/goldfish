@@ -348,6 +348,27 @@ Ordering: **unread before read/skipped, then `saved_at` descending within each g
 recorded in `sent_messages` with `kind='topic_list'` and a `payload` of
 `{"topic_id": n, "offset": n, "article_ids": [...]}` so a numeric reply can resolve.
 
+*Added during Step 7 build*: implementation notes, none of them new decisions:
+- **`search_articles(q text)` hardcodes the default user id** inside the function
+  body rather than taking it as a second parameter — D28 pins the signature as one
+  argument, and this is still a single-user app (D6). Mirrors `DEFAULT_USER_ID` in
+  `_shared/db.ts`.
+- **D30's ordering (unread before read/skipped, then `saved_at` desc) runs
+  client-side**, not in SQL. PostgREST's `.order()` only takes column names, not a
+  `CASE` expression, so `_shared/browse.ts` fetches a topic's full article list and
+  sorts in JS before slicing the page. Fine at single-user scale, and avoids needing
+  another raw Postgres connection the way D19's query did.
+- **Topic counts in the `/topics` menu are also computed client-side**: fetch
+  `article_topics.topic_id` and count in JS rather than betting on a specific
+  PostgREST version supporting an embedded `count()` aggregate.
+- **Markdown link titles get a minimal escape** (`[` and `]` only) before being
+  embedded as `[title](url)` — enough to stop a title containing a literal bracket
+  from breaking the link syntax, nothing more.
+- `/stats`, `/help`, and the plain-text-no-URL-no-reply nudge (all fully specified
+  in section 5's input table, none assigned to a numbered build step) were completed
+  here since they share this step's command-dispatch code, rather than left as
+  permanent gaps in the finished bot.
+
 ### PDFs
 
 **D31.** PDFs are stored in the private Supabase Storage bucket `papers` at

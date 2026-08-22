@@ -67,6 +67,33 @@ export async function answerCallbackQuery(
   }
 }
 
+// D30: used to turn a /topics menu message into a topic list page in place.
+export async function editMessageText(
+  chatId: number | string,
+  messageId: number,
+  text: string,
+  opts: { parseMode?: "HTML" | "Markdown"; replyMarkup?: InlineKeyboardButton[][] } = {},
+): Promise<void> {
+  const body: Record<string, unknown> = { chat_id: chatId, message_id: messageId, text };
+  if (opts.parseMode) {
+    body.parse_mode = opts.parseMode;
+  }
+  if (opts.replyMarkup) {
+    body.reply_markup = { inline_keyboard: opts.replyMarkup };
+  }
+
+  const res = await fetch(apiUrl("editMessageText"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json();
+  if (!data.ok) {
+    console.log("editMessageText failed", data.error_code, data.description);
+  }
+}
+
 // D24: replaces a message's inline keyboard in place. Never used to delete
 // or otherwise edit the message text itself.
 export async function editMessageReplyMarkup(

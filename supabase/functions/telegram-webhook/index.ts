@@ -3,10 +3,12 @@ import { domainOf, fetchMetadata, normalizeUrlKey } from "../_shared/metadata.ts
 import {
   answerCallbackQuery,
   editMessageReplyMarkup,
+  editMessageText,
   sendMessage,
   setMessageReaction,
 } from "../_shared/telegram.ts";
 import { assignTopics, findOrCreateTopic } from "../_shared/topics.ts";
+import { fetchTopicMenu, fetchTopicPage, renderTopicListMessage, sendArticleMessage } from "../_shared/browse.ts";
 import { copy } from "../_shared/copy.ts";
 
 const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
@@ -91,9 +93,45 @@ async function saveLink(db: ReturnType<typeof getServiceClient>, chatId: string,
   return true;
 }
 
-// D23: callback_data encodings. `t:<topic_id>:<offset>` (topic browsing)
-// lands in step 7 once topics exist; any prefix besides r/s/noop is logged
-// and otherwise ignored for now.
+// D30: tapping a topic button (or Prev/Next) edits the same message into
+// the requested page and (re)records it in sent_messages with the new
+// payload, so a later numeric reply always resolves against what's on
+// screen right now.
+async function handleTopicPageCallback(
+  db: ReturnType<typeof getServiceClient>,
+  chatId: string,
+  messageId: number,
+  topicId: number,
+  offset: number,
+  callbackQueryId: string,
+) {
+  const page = await fetchTopicPage(db, topicId, offset);
+  if (!page) {
+    await answerCallbackQuery(callbackQueryId);
+    return;
+  }
+
+  const { text, keyboard } = renderTopicListMessage(topicId, offset, page);
+  await editMessageText(chatId, messageId, text, { parseMode: "Markdown", replyMarkup: keyboard });
+  await answerCallbackQuery(callbackQueryId);
+
+  const articleIds = page.items.map((i) => i.id);
+  const { error } = await db.from("sent_messages").upsert(
+    {
+      user_id: DEFAULT_USER_ID,
+      chat_id: Number(chatId),
+      telegram_message_id: messageId,
+      kind: "topic_list",
+      payload: { topic_id: topicId, offset, article_ids: articleIds },
+    },
+    { onConflict: "chat_id,telegram_message_id" },
+  );
+  if (error) {
+    console.log("sent_messages upsert failed", error.code, error.message);
+  }
+}
+
+// D23: callback_data encodings.
 async function processCallbackQuery(
   db: ReturnType<typeof getServiceClient>,
   callbackQuery: Record<string, unknown>,
@@ -114,6 +152,13 @@ async function processCallbackQuery(
   if (data === "noop") {
     // D24: the replaced, non-actionable button. Empty ack, nothing else.
     await answerCallbackQuery(callbackQueryId);
+    return;
+  }
+
+  const topicMatch = data.match(/^t:(\d+):(\d+)$/);
+  if (topicMatch) {
+    const [, topicIdStr, offsetStr] = topicMatch;
+    await handleTopicPageCallback(db, chatId, messageId, Number(topicIdStr), Number(offsetStr), callbackQueryId);
     return;
   }
 
@@ -192,9 +237,31 @@ async function tagArticleWithTopic(
   await sendMessage(chatId, copy.topicAdded(topic.label, articleTitle));
 }
 
+// D26: `kind = 'topic_list'`, text is a bare integer → open that item as a
+// full article message. Any other text against a topic_list message (not a
+// bare integer) is ignored — the input table only pins the numeric case.
+async function handleTopicListReply(
+  db: ReturnType<typeof getServiceClient>,
+  chatId: string,
+  payload: unknown,
+  text: string,
+) {
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return;
+  }
+
+  const articleIds = (payload as { article_ids?: number[] } | null)?.article_ids ?? [];
+  const articleId = articleIds[Number(trimmed) - 1];
+  if (articleId === undefined) {
+    return;
+  }
+
+  await sendArticleMessage(db, chatId, articleId);
+}
+
 // D26: resolves a reply to a bot message via `sent_messages` on
-// (chat_id, telegram_message_id). `topic_list` numeric resolution needs
-// browsing to exist at all (Step 7), so that branch stays a no-op here.
+// (chat_id, telegram_message_id).
 async function handleReply(
   db: ReturnType<typeof getServiceClient>,
   chatId: string,
@@ -204,7 +271,7 @@ async function handleReply(
 ) {
   const { data: sentMessage, error } = await db
     .from("sent_messages")
-    .select("kind, article_id, articles(title)")
+    .select("kind, article_id, payload, articles(title)")
     .eq("chat_id", Number(chatId))
     .eq("telegram_message_id", repliedToMessageId)
     .maybeSingle();
@@ -213,8 +280,16 @@ async function handleReply(
     console.log("sent_messages lookup failed", error.code, error.message);
     return;
   }
-  if (!sentMessage || sentMessage.kind !== "article") {
-    // D26: no matching row, or a topic_list message (Step 7). Ignore entirely.
+  if (!sentMessage) {
+    // D26: no matching row. Ignore entirely.
+    return;
+  }
+
+  if (sentMessage.kind === "topic_list") {
+    await handleTopicListReply(db, chatId, sentMessage.payload, text);
+    return;
+  }
+  if (sentMessage.kind !== "article") {
     return;
   }
 
@@ -243,6 +318,53 @@ async function handleReply(
 
   // D27: react, send no reply message.
   await setMessageReaction(chatId, replyMessageId, "✍️");
+}
+
+// D28: top 5 via search_articles, each sent as its own article message.
+async function handleSearch(db: ReturnType<typeof getServiceClient>, chatId: string, query: string) {
+  const q = query.trim();
+  if (!q) {
+    return;
+  }
+
+  const { data: results, error } = await db.rpc("search_articles", { q });
+  if (error) {
+    console.log("search_articles rpc failed", error.code, error.message);
+    return;
+  }
+  if (!results || results.length === 0) {
+    await sendMessage(chatId, copy.searchEmpty(q));
+    return;
+  }
+
+  for (const row of results as Array<{ id: number }>) {
+    await sendArticleMessage(db, chatId, row.id);
+  }
+}
+
+// D29: one message, one button per topic, two per row, labelled with counts.
+async function handleTopicsCommand(db: ReturnType<typeof getServiceClient>, chatId: string) {
+  const menu = await fetchTopicMenu(db);
+  const buttons = menu.map((t) => ({ text: `${t.label} (${t.count})`, callback_data: `t:${t.id}:0` }));
+
+  const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+
+  await sendMessage(chatId, copy.topicsHeader(), { replyMarkup: rows });
+}
+
+async function handleStats(db: ReturnType<typeof getServiceClient>, chatId: string) {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [{ count: unread }, { count: read }, { count: week }] = await Promise.all([
+    db.from("articles").select("id", { count: "exact", head: true }).eq("status", "unread"),
+    db.from("articles").select("id", { count: "exact", head: true }).eq("status", "read"),
+    db.from("articles").select("id", { count: "exact", head: true }).gte("saved_at", sevenDaysAgo),
+  ]);
+
+  await sendMessage(chatId, copy.stats(unread ?? 0, read ?? 0, week ?? 0));
 }
 
 async function processUpdate(update: Record<string, unknown>) {
@@ -293,7 +415,33 @@ async function processUpdate(update: Record<string, unknown>) {
     return;
   }
 
+  // /search, /topics, /stats, /help aren't scoped to a specific numbered
+  // build step in SPEC.md's build order, but they're fully pinned in the
+  // input table (section 5) and share this step's command-dispatch code,
+  // so they're completed here rather than left dangling.
+  if (text.startsWith("/search ")) {
+    await handleSearch(db, chatId, text.slice("/search ".length));
+    return;
+  }
+  if (text === "/topics") {
+    await handleTopicsCommand(db, chatId);
+    return;
+  }
+  if (text === "/stats") {
+    await handleStats(db, chatId);
+    return;
+  }
+  if (text === "/help") {
+    await sendMessage(chatId, copy.help());
+    return;
+  }
+
   const urls = extractUrls(text);
+  if (urls.length === 0) {
+    await sendMessage(chatId, copy.nudge());
+    return;
+  }
+
   let hadFailure = false;
   for (const url of urls) {
     const ok = await saveLink(db, chatId, url);
