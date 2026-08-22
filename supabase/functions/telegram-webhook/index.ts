@@ -1,8 +1,12 @@
-// Step 1 scope only: secret header check, chat ID allowlist, update_id
-// dedup, URL extraction, insert with title from the hostname.
-// Metadata fetch and topic assignment are not implemented yet (SPEC.md step 2, 6).
+// Step 2 scope added: metadata fetch, URL normalisation, domain, duplicate
+// detection and reply, saved/unfetchable confirmations. Topic assignment
+// (D12-D14) is not implemented yet (SPEC.md step 6) — `copy.saved` is called
+// with an empty topics string until then.
 
-import { getServiceClient } from "../_shared/db.ts";
+import { DEFAULT_USER_ID, getServiceClient } from "../_shared/db.ts";
+import { domainOf, fetchMetadata, normalizeUrlKey } from "../_shared/metadata.ts";
+import { sendMessage } from "../_shared/telegram.ts";
+import { copy } from "../_shared/copy.ts";
 
 const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
 const ALLOWED_CHAT_ID = Deno.env.get("ALLOWED_CHAT_ID");
@@ -16,12 +20,57 @@ function extractUrls(text: string): string[] {
   return matches.map((url) => url.replace(TRAILING_PUNCTUATION, ""));
 }
 
-function hostnameOf(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
+function formatDate(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+async function saveLink(db: ReturnType<typeof getServiceClient>, chatId: string, url: string) {
+  const urlKey = normalizeUrlKey(url);
+  const domain = domainOf(url);
+
+  // D11: duplicate check happens before insert, on (user_id, url_key).
+  const { data: existing, error: lookupError } = await db
+    .from("articles")
+    .select("saved_at")
+    .eq("user_id", DEFAULT_USER_ID)
+    .eq("url_key", urlKey)
+    .limit(1)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.log("duplicate lookup failed", lookupError.code, lookupError.message);
+    return false;
   }
+
+  if (existing) {
+    await sendMessage(chatId, copy.duplicate(formatDate(existing.saved_at as string)));
+    return true;
+  }
+
+  const meta = await fetchMetadata(url);
+
+  const { error: insertError } = await db.from("articles").insert({
+    kind: "link",
+    url,
+    url_key: urlKey,
+    domain,
+    title: meta.title,
+    description: meta.description,
+    fetch_ok: meta.fetchOk,
+  });
+
+  if (insertError) {
+    console.log("article insert failed", insertError.code, insertError.message);
+    return false;
+  }
+
+  // Topic assignment (D12-D14) lands in step 6; topics is empty until then.
+  if (meta.fetchOk) {
+    await sendMessage(chatId, copy.saved(meta.title, ""));
+  } else {
+    await sendMessage(chatId, copy.savedUnfetchable(meta.title));
+  }
+  return true;
 }
 
 async function processUpdate(update: Record<string, unknown>) {
@@ -61,14 +110,8 @@ async function processUpdate(update: Record<string, unknown>) {
   const urls = extractUrls(text);
   let hadFailure = false;
   for (const url of urls) {
-    const title = hostnameOf(url);
-    const { error } = await db.from("articles").insert({
-      kind: "link",
-      url,
-      title,
-    });
-    if (error) {
-      console.log("article insert failed", error.code, error.message);
+    const ok = await saveLink(db, chatId, url);
+    if (!ok) {
       hadFailure = true;
     }
   }
