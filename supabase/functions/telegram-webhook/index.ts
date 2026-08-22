@@ -8,9 +8,12 @@ const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
 const ALLOWED_CHAT_ID = Deno.env.get("ALLOWED_CHAT_ID");
 
 const URL_REGEX = /https?:\/\/[^\s<>"]+/g;
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/;
 
 function extractUrls(text: string): string[] {
-  return text.match(URL_REGEX) ?? [];
+  const matches = text.match(URL_REGEX) ?? [];
+  // D37: strip trailing punctuation picked up from sentences or markdown links.
+  return matches.map((url) => url.replace(TRAILING_PUNCTUATION, ""));
 }
 
 function hostnameOf(url: string): string {
@@ -56,6 +59,7 @@ async function processUpdate(update: Record<string, unknown>) {
   }
 
   const urls = extractUrls(text);
+  let hadFailure = false;
   for (const url of urls) {
     const title = hostnameOf(url);
     const { error } = await db.from("articles").insert({
@@ -65,7 +69,14 @@ async function processUpdate(update: Record<string, unknown>) {
     });
     if (error) {
       console.log("article insert failed", error.code, error.message);
+      hadFailure = true;
     }
+  }
+
+  if (hadFailure) {
+    // D38: don't let a transient failure get permanently deduped away.
+    // Deleting the processed_updates row lets a genuine redelivery retry.
+    await db.from("processed_updates").delete().eq("update_id", updateId);
   }
 }
 

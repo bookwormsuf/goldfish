@@ -321,6 +321,25 @@ They are searchable and browsable. No text extraction in v1.
 **D36.** All user-facing strings live in `_shared/copy.ts`. No string literals in
 handler code. See section 6.
 
+### Additions (pinned during Step 1 build)
+
+Step 1's implementation review surfaced two gaps the original spec left open.
+Both were put to the user and settled — pinned here the same as D1-D36.
+
+**D37.** URL extraction strips trailing punctuation from the match. After the
+regex match, trim any of `.,;:!?)]}'"` off the end of the string, repeatedly,
+before the URL is used for anything (hostname, storage, later normalisation).
+This fixes cases like `https://x.com/post,` or `https://x.com/post).` from
+ordinary sentence punctuation or markdown-link parens. Do not parse Telegram's
+`message.entities` for this — extraction stays a plain regex match plus trim.
+
+**D38.** If saving an article fails after its `update_id` has already been
+inserted into `processed_updates` (D3), delete that `processed_updates` row
+before returning from the background processing. This lets a genuine Telegram
+redelivery, or the user resending the same link, retry the save instead of
+being silently deduped away by a row that only exists because of a transient
+failure.
+
 ---
 
 ## 4. Schema
