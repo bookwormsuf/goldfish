@@ -1,0 +1,1 @@
+-- No seed data. Topics are seeded by migration 0001_init.sql.

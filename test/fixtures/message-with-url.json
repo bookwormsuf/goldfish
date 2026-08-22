@@ -1,0 +1,10 @@
+{
+  "update_id": __UPDATE_ID__,
+  "message": {
+    "message_id": 1,
+    "date": 1700000000,
+    "chat": { "id": __ALLOWED_CHAT_ID__, "type": "private" },
+    "from": { "id": __ALLOWED_CHAT_ID__, "is_bot": false, "first_name": "Test" },
+    "text": "Check this out https://example.com/article-one"
+  }
+}

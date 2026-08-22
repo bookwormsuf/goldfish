@@ -443,7 +443,19 @@ insert into topics (slug, label) values
   ('health-fitness',    'Health & Fitness'),
   ('personal-finance',  'Personal Finance'),
   ('other',             'Other');
+
+-- New tables are not auto-exposed to the API roles by default. D6 says
+-- functions use the service role key with no RLS, so grant it direct access.
+grant usage on schema public to service_role;
+grant select, insert, update, delete on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to service_role;
 ```
+
+*Added during Step 1 build*: the grant block above wasn't in the original pin.
+Current Supabase projects don't auto-expose new tables to `service_role`
+(`arwd` privileges are withheld by default now), so without it every query
+from an Edge Function fails with Postgres error `42501`. This is a mechanical
+consequence of D6 (service role, no RLS), not a new design decision.
 
 ### `0002_search.sql`
 
