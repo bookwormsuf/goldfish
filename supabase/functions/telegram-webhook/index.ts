@@ -1,8 +1,3 @@
-// Step 2 scope added: metadata fetch, URL normalisation, domain, duplicate
-// detection and reply, saved/unfetchable confirmations. Topic assignment
-// (D12-D14) is not implemented yet (SPEC.md step 6) — `copy.saved` is called
-// with an empty topics string until then.
-
 import { DEFAULT_USER_ID, getServiceClient } from "../_shared/db.ts";
 import { domainOf, fetchMetadata, normalizeUrlKey } from "../_shared/metadata.ts";
 import {
@@ -11,6 +6,7 @@ import {
   sendMessage,
   setMessageReaction,
 } from "../_shared/telegram.ts";
+import { assignTopics, findOrCreateTopic } from "../_shared/topics.ts";
 import { copy } from "../_shared/copy.ts";
 
 const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
@@ -54,24 +50,41 @@ async function saveLink(db: ReturnType<typeof getServiceClient>, chatId: string,
 
   const meta = await fetchMetadata(url);
 
-  const { error: insertError } = await db.from("articles").insert({
-    kind: "link",
-    url,
-    url_key: urlKey,
-    domain,
-    title: meta.title,
-    description: meta.description,
-    fetch_ok: meta.fetchOk,
-  });
+  const { data: inserted, error: insertError } = await db
+    .from("articles")
+    .insert({
+      kind: "link",
+      url,
+      url_key: urlKey,
+      domain,
+      title: meta.title,
+      description: meta.description,
+      fetch_ok: meta.fetchOk,
+    })
+    .select("id")
+    .single();
 
   if (insertError) {
     console.log("article insert failed", insertError.code, insertError.message);
     return false;
   }
 
-  // Topic assignment (D12-D14) lands in step 6; topics is empty until then.
+  // D12: assignment runs regardless of fetch_ok — a bare-hostname title with
+  // no description just tends to land on `other` (D14's fallback), it isn't
+  // excluded outright.
+  const topics = await assignTopics(db, meta.title, meta.description);
+  if (topics.length > 0) {
+    const { error: tagError } = await db.from("article_topics").insert(
+      topics.map((t) => ({ article_id: inserted.id, topic_id: t.id, assigned_by: "llm" })),
+    );
+    if (tagError) {
+      console.log("article_topics insert failed", tagError.code, tagError.message);
+    }
+  }
+  const topicLabels = topics.map((t) => t.label).join(", ");
+
   if (meta.fetchOk) {
-    await sendMessage(chatId, copy.saved(meta.title, ""));
+    await sendMessage(chatId, copy.saved(meta.title, topicLabels));
   } else {
     await sendMessage(chatId, copy.savedUnfetchable(meta.title));
   }
@@ -147,11 +160,41 @@ async function processCallbackQuery(
   }
 }
 
+// D26's `/topic ` branch: create the topic if new (D15, forward-only —
+// never re-tags older articles), tag this one article, confirm.
+async function tagArticleWithTopic(
+  db: ReturnType<typeof getServiceClient>,
+  chatId: string,
+  articleId: number,
+  articleTitle: string,
+  rawName: string,
+) {
+  if (!rawName.trim()) {
+    return;
+  }
+
+  const topic = await findOrCreateTopic(db, rawName);
+  if (!topic) {
+    return;
+  }
+
+  const { error: tagError } = await db
+    .from("article_topics")
+    .upsert(
+      { article_id: articleId, topic_id: topic.id, assigned_by: "user" },
+      { onConflict: "article_id,topic_id" },
+    );
+  if (tagError) {
+    console.log("article_topics insert failed", tagError.code, tagError.message);
+    return;
+  }
+
+  await sendMessage(chatId, copy.topicAdded(topic.label, articleTitle));
+}
+
 // D26: resolves a reply to a bot message via `sent_messages` on
-// (chat_id, telegram_message_id). Step 5 scope is the plain-text note
-// branch only — `/topic ` tagging needs topics (Step 6) and numeric
-// `topic_list` resolution needs browsing (Step 7); both are left alone
-// here rather than half-built.
+// (chat_id, telegram_message_id). `topic_list` numeric resolution needs
+// browsing to exist at all (Step 7), so that branch stays a no-op here.
 async function handleReply(
   db: ReturnType<typeof getServiceClient>,
   chatId: string,
@@ -161,7 +204,7 @@ async function handleReply(
 ) {
   const { data: sentMessage, error } = await db
     .from("sent_messages")
-    .select("kind, article_id")
+    .select("kind, article_id, articles(title)")
     .eq("chat_id", Number(chatId))
     .eq("telegram_message_id", repliedToMessageId)
     .maybeSingle();
@@ -174,8 +217,16 @@ async function handleReply(
     // D26: no matching row, or a topic_list message (Step 7). Ignore entirely.
     return;
   }
+
   if (text.startsWith("/topic ")) {
-    // D26's tagging branch — lands in Step 6.
+    const articleTitle = (sentMessage.articles as unknown as { title: string }).title;
+    await tagArticleWithTopic(
+      db,
+      chatId,
+      sentMessage.article_id,
+      articleTitle,
+      text.slice("/topic ".length),
+    );
     return;
   }
 

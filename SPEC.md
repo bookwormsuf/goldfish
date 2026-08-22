@@ -186,6 +186,21 @@ never block or fail a save.**
 **D15.** Topics added later via `/topic` are forward-only. Never re-tag existing
 articles. No `/retag` command in v1.
 
+*Added during Step 6 build*: two mechanical points needed to actually run D26's
+`/topic ` branch and D12's assignment, neither of which SPEC.md pinned a shape for:
+- **Slug/label derivation for a user-typed `/topic <name>`.** The slug is
+  kebab-cased from the typed text (lowercase, non-alphanumerics collapsed to single
+  hyphens) for matching against `unique(user_id, slug)`; the label is title-cased
+  from the same text rather than preserving whatever casing was typed, so
+  user-created topics read consistently next to the fixed seed list. Retyping the
+  same name (any casing) matches the existing row by slug instead of creating a
+  duplicate.
+- **Topic assignment runs on every saved link, fetch_ok or not.** D12 doesn't
+  condition assignment on fetch success, so an unfetchable article (title = bare
+  hostname, no description) still goes through Haiku — it just tends to land on
+  `other` per D14, which is the correct fallback outcome, not a bug. Multiple
+  assigned labels in `copy.saved`'s topics string are joined with `", "`.
+
 **D16.** Seed topics, exactly these 15:
 
 ```
