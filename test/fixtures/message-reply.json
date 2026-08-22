@@ -1,0 +1,9 @@
+{
+  "update_id": __UPDATE_ID__,
+  "message": {
+    "message_id": __REPLY_MESSAGE_ID__,
+    "chat": { "id": __ALLOWED_CHAT_ID__ },
+    "text": "__TEXT__",
+    "reply_to_message": { "message_id": __REPLIED_TO_MESSAGE_ID__ }
+  }
+}

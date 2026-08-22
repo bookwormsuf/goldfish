@@ -5,7 +5,12 @@
 
 import { DEFAULT_USER_ID, getServiceClient } from "../_shared/db.ts";
 import { domainOf, fetchMetadata, normalizeUrlKey } from "../_shared/metadata.ts";
-import { answerCallbackQuery, editMessageReplyMarkup, sendMessage } from "../_shared/telegram.ts";
+import {
+  answerCallbackQuery,
+  editMessageReplyMarkup,
+  sendMessage,
+  setMessageReaction,
+} from "../_shared/telegram.ts";
 import { copy } from "../_shared/copy.ts";
 
 const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
@@ -142,6 +147,53 @@ async function processCallbackQuery(
   }
 }
 
+// D26: resolves a reply to a bot message via `sent_messages` on
+// (chat_id, telegram_message_id). Step 5 scope is the plain-text note
+// branch only — `/topic ` tagging needs topics (Step 6) and numeric
+// `topic_list` resolution needs browsing (Step 7); both are left alone
+// here rather than half-built.
+async function handleReply(
+  db: ReturnType<typeof getServiceClient>,
+  chatId: string,
+  repliedToMessageId: number,
+  replyMessageId: number,
+  text: string,
+) {
+  const { data: sentMessage, error } = await db
+    .from("sent_messages")
+    .select("kind, article_id")
+    .eq("chat_id", Number(chatId))
+    .eq("telegram_message_id", repliedToMessageId)
+    .maybeSingle();
+
+  if (error) {
+    console.log("sent_messages lookup failed", error.code, error.message);
+    return;
+  }
+  if (!sentMessage || sentMessage.kind !== "article") {
+    // D26: no matching row, or a topic_list message (Step 7). Ignore entirely.
+    return;
+  }
+  if (text.startsWith("/topic ")) {
+    // D26's tagging branch — lands in Step 6.
+    return;
+  }
+
+  const { error: noteError } = await db.from("notes").insert({
+    article_id: sentMessage.article_id,
+    body: text,
+    telegram_message_id: replyMessageId,
+  });
+
+  if (noteError) {
+    console.log("note insert failed", noteError.code, noteError.message);
+    return;
+  }
+
+  // D27: react, send no reply message.
+  await setMessageReaction(chatId, replyMessageId, "✍️");
+}
+
 async function processUpdate(update: Record<string, unknown>) {
   const db = getServiceClient();
 
@@ -179,6 +231,14 @@ async function processUpdate(update: Record<string, unknown>) {
 
   const text = message.text as string | undefined;
   if (!text) {
+    return;
+  }
+
+  const replyTo = message.reply_to_message as Record<string, unknown> | undefined;
+  if (replyTo) {
+    const repliedToMessageId = replyTo.message_id as number;
+    const replyMessageId = message.message_id as number;
+    await handleReply(db, chatId, repliedToMessageId, replyMessageId, text);
     return;
   }
 

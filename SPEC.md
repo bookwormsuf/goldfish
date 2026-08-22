@@ -306,6 +306,15 @@ new decision — both are direct consequences of decisions already pinned:
 **D27.** Notes are stored as plain markdown text, exactly as typed. No processing, no
 summarising, no truncation.
 
+*Added during Step 5 build*: per the Step 5 build-order scope (SPEC.md section 7),
+only D26's first bullet is implemented now — a reply to a `kind='article'` message
+whose text doesn't start with `/topic ` inserts a note and reacts. The other two D26
+branches are left alone rather than half-built, since both depend on things that
+don't exist yet: `/topic `-prefixed replies need topic creation (Step 6), and
+`kind='topic_list'` numeric resolution needs topic browsing to exist at all (Step 7).
+A reply matching either of those is currently a silent no-op, same as an unmatched
+`sent_messages` lookup — not a bug, just not built yet.
+
 ### Search and browse
 
 **D28.** `/search <query>` calls the `search_articles(q text)` Postgres function.

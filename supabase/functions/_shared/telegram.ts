@@ -1,6 +1,6 @@
 // Raw fetch wrappers around the Telegram Bot API. No framework. (D1)
 // Only the methods actually in use are implemented; more are added as later
-// build steps need them (sendDocument, setMessageReaction, getFile).
+// build steps need them (sendDocument, getFile).
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
@@ -87,5 +87,28 @@ export async function editMessageReplyMarkup(
   const data = await res.json();
   if (!data.ok) {
     console.log("editMessageReplyMarkup failed", data.error_code, data.description);
+  }
+}
+
+// D27: reacts to a message instead of sending a reply, so a note doesn't
+// generate its own reply-chain noise.
+export async function setMessageReaction(
+  chatId: number | string,
+  messageId: number,
+  emoji: string,
+): Promise<void> {
+  const res = await fetch(apiUrl("setMessageReaction"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: "emoji", emoji }],
+    }),
+  });
+
+  const data = await res.json();
+  if (!data.ok) {
+    console.log("setMessageReaction failed", data.error_code, data.description);
   }
 }
