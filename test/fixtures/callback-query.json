@@ -1,0 +1,11 @@
+{
+  "update_id": __UPDATE_ID__,
+  "callback_query": {
+    "id": "__CALLBACK_ID__",
+    "message": {
+      "message_id": __MESSAGE_ID__,
+      "chat": { "id": __ALLOWED_CHAT_ID__ }
+    },
+    "data": "__CALLBACK_DATA__"
+  }
+}

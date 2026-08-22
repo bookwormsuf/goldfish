@@ -281,6 +281,18 @@ message.**
 **D25.** `status` transitions are one-way. Once `read` or `skipped`, an article never
 returns to the pool. Skipped articles are never resurfaced.
 
+*Added during Step 4 build*: two mechanical points not spelled out above, neither a
+new decision — both are direct consequences of decisions already pinned:
+- `callback_query` updates go through the same `update_id` dedup (D3) and chat
+  allowlist (D4) as regular messages, since both exist to keep this bot talking to
+  exactly one chat. The one-way guard in D25 is enforced with a conditional update
+  (`... where status = 'unread'`), so a retried or double-tapped callback is a no-op
+  rather than a second write — `editMessageReplyMarkup` still runs on a no-op so a
+  stale keyboard gets cleaned up either way.
+- `t:<topic_id>:<offset>` (topic browsing) has no handler yet — topics don't exist
+  until Step 6/7. Until then any callback_data that isn't `r:`, `s:`, or `noop` is
+  acknowledged with an empty `answerCallbackQuery` and logged, not crashed on.
+
 **D26.** A reply to a bot message is resolved via `sent_messages` on
 `(chat_id, telegram_message_id)`:
 - `kind = 'article'`, plain text → insert a note on that article, react ✍️ via

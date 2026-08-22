@@ -5,7 +5,7 @@
 
 import { DEFAULT_USER_ID, getServiceClient } from "../_shared/db.ts";
 import { domainOf, fetchMetadata, normalizeUrlKey } from "../_shared/metadata.ts";
-import { sendMessage } from "../_shared/telegram.ts";
+import { answerCallbackQuery, editMessageReplyMarkup, sendMessage } from "../_shared/telegram.ts";
 import { copy } from "../_shared/copy.ts";
 
 const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
@@ -73,6 +73,75 @@ async function saveLink(db: ReturnType<typeof getServiceClient>, chatId: string,
   return true;
 }
 
+// D23: callback_data encodings. `t:<topic_id>:<offset>` (topic browsing)
+// lands in step 7 once topics exist; any prefix besides r/s/noop is logged
+// and otherwise ignored for now.
+async function processCallbackQuery(
+  db: ReturnType<typeof getServiceClient>,
+  callbackQuery: Record<string, unknown>,
+) {
+  const callbackQueryId = callbackQuery.id as string;
+  const data = callbackQuery.data as string | undefined;
+  const cbMessage = callbackQuery.message as Record<string, unknown> | undefined;
+  const chat = cbMessage?.chat as Record<string, unknown> | undefined;
+  const chatId = chat?.id !== undefined ? String(chat.id) : undefined;
+  const messageId = cbMessage?.message_id as number | undefined;
+
+  if (!data || chatId !== ALLOWED_CHAT_ID || messageId === undefined) {
+    console.log("rejected callback_query", chatId, data);
+    await answerCallbackQuery(callbackQueryId);
+    return;
+  }
+
+  if (data === "noop") {
+    // D24: the replaced, non-actionable button. Empty ack, nothing else.
+    await answerCallbackQuery(callbackQueryId);
+    return;
+  }
+
+  const match = data.match(/^([rs]):(\d+)$/);
+  if (!match) {
+    console.log("unrecognised callback_data", data);
+    await answerCallbackQuery(callbackQueryId);
+    return;
+  }
+
+  const [, action, articleIdStr] = match;
+  const articleId = Number(articleIdStr);
+  const newStatus = action === "r" ? "read" : "skipped";
+
+  // D25: one-way transition. The `.eq("status", "unread")` guard means a
+  // retried callback (or a stale keyboard tapped twice) can't flip it back
+  // or re-resolve an already-resolved article.
+  const { data: updated, error: updateError } = await db
+    .from("articles")
+    .update({ status: newStatus, resolved_at: new Date().toISOString() })
+    .eq("id", articleId)
+    .eq("status", "unread")
+    .select("id");
+
+  if (updateError) {
+    console.log("article status update failed", updateError.code, updateError.message);
+    await answerCallbackQuery(callbackQueryId);
+    return;
+  }
+
+  const ackText = action === "r" ? copy.markedRead() : copy.markedSkipped();
+  await answerCallbackQuery(callbackQueryId, ackText);
+
+  // D24: replace both buttons with a single non-actionable one. Runs even
+  // if this callback lost the race (article already resolved), so a stale
+  // keyboard on screen still gets cleaned up. Never delete the message.
+  const doneLabel = action === "r" ? copy.btnDoneRead() : copy.btnDoneSkipped();
+  await editMessageReplyMarkup(chatId, messageId, [[
+    { text: doneLabel, callback_data: "noop" },
+  ]]);
+
+  if (!updated || updated.length === 0) {
+    console.log("callback_query on already-resolved article", articleId);
+  }
+}
+
 async function processUpdate(update: Record<string, unknown>) {
   const db = getServiceClient();
 
@@ -87,6 +156,12 @@ async function processUpdate(update: Record<string, unknown>) {
       return;
     }
     console.log("processed_updates insert failed", dedupError.code);
+    return;
+  }
+
+  const callbackQuery = update.callback_query as Record<string, unknown> | undefined;
+  if (callbackQuery) {
+    await processCallbackQuery(db, callbackQuery);
     return;
   }
 
