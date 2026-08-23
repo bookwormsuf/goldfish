@@ -46,7 +46,7 @@ export async function fetchTopicMenu(
 interface TopicArticleRow {
   id: number;
   title: string;
-  url: string;
+  url: string | null;
   status: string;
   saved_at: string;
 }
@@ -54,7 +54,7 @@ interface TopicArticleRow {
 export interface TopicPage {
   label: string;
   total: number;
-  items: Array<{ id: number; title: string; url: string; status: string }>;
+  items: Array<{ id: number; title: string; url: string | null; status: string }>;
   hasPrev: boolean;
   hasNext: boolean;
 }
@@ -132,7 +132,12 @@ export function renderTopicListMessage(
   const lines = [copy.topicListHeader(page.label, page.total), ""];
   page.items.forEach((item, i) => {
     const num = offset + i + 1;
-    lines.push(`${num}. [${escapeMarkdownLinkText(item.title)}](${item.url}) — ${statusWord(item.status)}`);
+    // Step 8: PDFs have no url, so they render as plain text instead of a
+    // markdown link (SPEC.md addendum after D34).
+    const titleText = item.url
+      ? `[${escapeMarkdownLinkText(item.title)}](${item.url})`
+      : escapeMarkdownLinkText(item.title);
+    lines.push(`${num}. ${titleText} — ${statusWord(item.status)}`);
   });
   lines.push("");
   lines.push(copy.topicListFooter());
@@ -158,7 +163,7 @@ export async function sendArticleMessage(
 ): Promise<boolean> {
   const { data: article, error: articleError } = await db
     .from("articles")
-    .select("title, description, url")
+    .select("title, description, url, kind")
     .eq("id", articleId)
     .maybeSingle();
   if (articleError || !article) {
@@ -182,7 +187,9 @@ export async function sendArticleMessage(
     title: article.title,
     description: article.description,
     topics: topicLabels,
-    url: article.url,
+    // Step 8: a PDF has no url. articleMessageHtml renders a "(PDF)" marker
+    // in its place rather than resending the file (SPEC.md addendum after D34).
+    url: article.kind === "pdf" ? null : article.url,
   });
 
   const sent = await sendMessage(chatId, text, {

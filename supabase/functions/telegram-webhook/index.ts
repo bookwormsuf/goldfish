@@ -2,8 +2,10 @@ import { DEFAULT_USER_ID, getServiceClient } from "../_shared/db.ts";
 import { domainOf, fetchMetadata, normalizeUrlKey } from "../_shared/metadata.ts";
 import {
   answerCallbackQuery,
+  downloadFile,
   editMessageReplyMarkup,
   editMessageText,
+  getFile,
   sendMessage,
   setMessageReaction,
 } from "../_shared/telegram.ts";
@@ -90,6 +92,91 @@ async function saveLink(db: ReturnType<typeof getServiceClient>, chatId: string,
   } else {
     await sendMessage(chatId, copy.savedUnfetchable(meta.title));
   }
+  return true;
+}
+
+const PDF_MAX_BYTES = 20 * 1024 * 1024;
+
+// D32: filename with a trailing .pdf stripped.
+function pdfTitleFromFilename(filename: string): string {
+  return filename.replace(/\.pdf$/i, "");
+}
+
+// D31-D33: insert-then-upload-then-update, size limit enforced before ever
+// calling getFile, and PDFs are never deduplicated (D11). Returns false only
+// when the article row itself couldn't be created — a download/upload
+// failure is D31's own prescribed graceful outcome (row stays, storage_path
+// null, bot reports it), not the kind of failure D38's retry-via-redelivery
+// covers.
+async function savePdf(
+  db: ReturnType<typeof getServiceClient>,
+  chatId: string,
+  document: Record<string, unknown>,
+  caption: string | undefined,
+): Promise<boolean> {
+  const fileId = document.file_id as string;
+  const fileName = (document.file_name as string | undefined) ?? "document.pdf";
+  const fileSize = document.file_size as number | undefined;
+
+  if (fileSize !== undefined && fileSize > PDF_MAX_BYTES) {
+    await sendMessage(chatId, copy.pdfTooBig());
+    return true;
+  }
+
+  const title = caption?.trim() ? caption.trim() : pdfTitleFromFilename(fileName);
+
+  const { data: inserted, error: insertError } = await db
+    .from("articles")
+    .insert({ kind: "pdf", title, description: null, fetch_ok: true })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    console.log("pdf article insert failed", insertError.code, insertError.message);
+    return false;
+  }
+
+  // D12: assignment runs the same as a link save, title + null description.
+  const topics = await assignTopics(db, title, null);
+  if (topics.length > 0) {
+    const { error: tagError } = await db.from("article_topics").insert(
+      topics.map((t) => ({ article_id: inserted.id, topic_id: t.id, assigned_by: "llm" })),
+    );
+    if (tagError) {
+      console.log("article_topics insert failed", tagError.code, tagError.message);
+    }
+  }
+
+  const fileInfo = await getFile(fileId);
+  const filePath = fileInfo.result?.file_path;
+  const bytes = filePath ? await downloadFile(filePath) : null;
+
+  if (!bytes) {
+    await sendMessage(chatId, copy.pdfUploadFailed(title));
+    return true;
+  }
+
+  const { error: uploadError } = await db.storage
+    .from("papers")
+    .upload(`${inserted.id}.pdf`, bytes, { contentType: "application/pdf" });
+
+  if (uploadError) {
+    console.log("pdf upload failed", uploadError.message);
+    await sendMessage(chatId, copy.pdfUploadFailed(title));
+    return true;
+  }
+
+  // D31: storage_path is the full papers/<id>.pdf location, updated only
+  // after a successful upload.
+  const { error: updateError } = await db
+    .from("articles")
+    .update({ storage_path: `papers/${inserted.id}.pdf` })
+    .eq("id", inserted.id);
+  if (updateError) {
+    console.log("pdf storage_path update failed", updateError.code, updateError.message);
+  }
+
+  await sendMessage(chatId, copy.savedPdf(title));
   return true;
 }
 
@@ -399,6 +486,25 @@ async function processUpdate(update: Record<string, unknown>) {
   const chatId = chat?.id !== undefined ? String(chat.id) : undefined;
   if (chatId !== ALLOWED_CHAT_ID) {
     console.log("rejected update from foreign chat", chatId);
+    return;
+  }
+
+  // Step 8: PDF documents are handled independently of reply/text context —
+  // the input table pins no reply behaviour for them. Non-PDF documents
+  // (by mime_type, falling back to filename) are a silent no-op, same as
+  // any other unpinned input shape.
+  const document = message.document as Record<string, unknown> | undefined;
+  if (document) {
+    const mimeType = document.mime_type as string | undefined;
+    const fileName = document.file_name as string | undefined;
+    const isPdf = mimeType === "application/pdf" || (!mimeType && /\.pdf$/i.test(fileName ?? ""));
+    if (isPdf) {
+      const caption = message.caption as string | undefined;
+      const ok = await savePdf(db, chatId, document, caption);
+      if (!ok) {
+        await db.from("processed_updates").delete().eq("update_id", updateId);
+      }
+    }
     return;
   }
 

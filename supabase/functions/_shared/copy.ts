@@ -66,7 +66,7 @@ export function articleMessageHtml(article: {
   title: string;
   description: string | null;
   topics: string;
-  url: string;
+  url: string | null;
 }): string {
   const lines = [`<b>${escapeHtml(article.title)}</b>`];
   if (article.description) {
@@ -74,6 +74,7 @@ export function articleMessageHtml(article: {
   }
   lines.push("");
   lines.push(escapeHtml(article.topics));
-  lines.push(escapeHtml(article.url));
+  // Step 8: PDFs have no url (SPEC.md addendum after D34).
+  lines.push(article.url ? escapeHtml(article.url) : "(PDF)");
   return lines.join("\n");
 }

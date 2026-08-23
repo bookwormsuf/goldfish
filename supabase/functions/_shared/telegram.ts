@@ -1,6 +1,8 @@
 // Raw fetch wrappers around the Telegram Bot API. No framework. (D1)
 // Only the methods actually in use are implemented; more are added as later
-// build steps need them (sendDocument, getFile).
+// build steps need them (sendDocument is still unused — Step 8 chose a
+// text-only rendering for browsed/searched PDFs, see SPEC.md's addendum
+// after D34).
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
@@ -115,6 +117,38 @@ export async function editMessageReplyMarkup(
   if (!data.ok) {
     console.log("editMessageReplyMarkup failed", data.error_code, data.description);
   }
+}
+
+export interface GetFileResult {
+  ok: boolean;
+  result?: { file_id: string; file_path?: string; file_size?: number };
+}
+
+// D31: resolves a Telegram file_id to a download path.
+export async function getFile(fileId: string): Promise<GetFileResult> {
+  const res = await fetch(apiUrl("getFile"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_id: fileId }),
+  });
+
+  const data = await res.json();
+  if (!data.ok) {
+    console.log("getFile failed", data.error_code, data.description);
+  }
+  return data;
+}
+
+// D31: not one of the Bot API "methods" D1 closes the list to — this is the
+// separate token-scoped file-serving endpoint, needed to actually fetch the
+// bytes getFile's path points at before uploading to Storage.
+export async function downloadFile(filePath: string): Promise<Uint8Array | null> {
+  const res = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`);
+  if (!res.ok) {
+    console.log("downloadFile failed", res.status);
+    return null;
+  }
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 // D27: reacts to a message instead of sending a reply, so a note doesn't

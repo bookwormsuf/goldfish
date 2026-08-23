@@ -403,6 +403,33 @@ cannot download files above that limit.
 **D34.** PDFs are excluded from the daily digest (`kind = 'link'` filter in D19).
 They are searchable and browsable. No text extraction in v1.
 
+*Added during Step 8 build*: four mechanical points D31-D34 didn't pin a shape
+for, put to the user where it was a real design choice rather than guessed:
+- **Bucket creation** happens in a new `supabase/migrations/0004_storage.sql`,
+  inserting into `storage.buckets` directly — the same "infra as a migration"
+  pattern as the grant blocks in `0001_init.sql`/`0002_search.sql`. Section 4's
+  repo layout only lists three migration files because that's what the
+  originally-scoped work needed; a fourth is a mechanical consequence of D31
+  needing a bucket to exist, not a new design decision.
+- **Rendering a PDF via search/browse** (`sendArticleMessage`,
+  `renderTopicListMessage`): D34 says PDFs are "searchable and browsable" but
+  neither `articleMessageHtml` nor the topic-list markdown-link line has a url
+  to work with for a PDF row. Put to the user: PDFs render as plain text (a
+  `(PDF)` marker in place of the url line; the title as plain text instead of
+  a markdown link in topic lists) rather than re-sending the file via
+  `sendDocument`. `sendDocument` stays unimplemented — D1's method list is a
+  closed set of what's *allowed*, not a mandate that all six exist.
+- **Non-PDF documents** (any Telegram document whose `mime_type` isn't
+  `application/pdf`, falling back to a `.pdf` filename check when Telegram
+  omits `mime_type`) are a silent no-op — the input table only pins behaviour
+  for "a PDF document," and no other document type has a designed behaviour
+  yet, same footing as the other unmatched-input no-ops in section 5.
+- **Topic assignment (D12) runs for PDFs too**, using the resolved title and
+  a null description — D12 doesn't scope itself to `kind = 'link'`, and
+  `copy.savedPdf` just doesn't surface the labels in the confirmation the way
+  `copy.saved` does for links. The assignment still happens; it's browsable
+  via `/topics` afterward.
+
 ### Housekeeping
 
 **D35.** A weekly cron job deletes `processed_updates` rows older than 7 days.

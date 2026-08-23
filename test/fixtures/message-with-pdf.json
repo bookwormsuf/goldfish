@@ -1,0 +1,16 @@
+{
+  "update_id": __UPDATE_ID__,
+  "message": {
+    "message_id": 1,
+    "date": 1700000000,
+    "chat": { "id": __ALLOWED_CHAT_ID__, "type": "private" },
+    "from": { "id": __ALLOWED_CHAT_ID__, "is_bot": false, "first_name": "Test" },
+    "document": {
+      "file_id": "__FILE_ID__",
+      "file_unique_id": "unique1",
+      "file_name": "__FILE_NAME__",
+      "mime_type": "application/pdf",
+      "file_size": __FILE_SIZE__
+    }
+  }
+}
