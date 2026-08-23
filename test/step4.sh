@@ -21,6 +21,7 @@ fi
 
 : "${TELEGRAM_SECRET_TOKEN:?TELEGRAM_SECRET_TOKEN not set (check .env.local)}"
 : "${ALLOWED_CHAT_ID:?ALLOWED_CHAT_ID not set (check .env.local)}"
+: "${DIGEST_CRON_SECRET:?DIGEST_CRON_SECRET not set (check .env.local)}"
 
 WEBHOOK_URL="${WEBHOOK_URL:-http://127.0.0.1:54321/functions/v1/telegram-webhook}"
 DIGEST_URL="${DIGEST_URL:-http://127.0.0.1:54321/functions/v1/daily-digest}"
@@ -157,7 +158,7 @@ SQL
 sql_file "$TMP/backoff_seed.sql" >/dev/null
 
 deliveries_before=$(sql "select count(*) from deliveries;")
-resp=$(curl -s -X POST "$DIGEST_URL")
+resp=$(curl -s -X POST "$DIGEST_URL" -H "Authorization: Bearer ${DIGEST_CRON_SECRET}")
 echo "  digest response: $resp"
 deliveries_after=$(sql "select count(*) from deliveries;")
 assert_eq "response mentions backoff" "$(echo "$resp" | grep -o '"backoff":true')" '"backoff":true'

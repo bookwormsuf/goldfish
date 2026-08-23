@@ -242,6 +242,28 @@ other               Other
 **D17.** Runs at `0 0 * * *` UTC, which is 08:00 Asia/Singapore. `pg_cron` schedules
 are UTC. Do not attempt timezone conversion in the schedule.
 
+*Added during Step 9 build*: `0003_cron.sql`'s pinned SQL authenticates its
+`net.http_post` call with `current_setting('app.service_role_key')`, set via
+`alter database postgres set app.service_role_key = '...'`. That statement fails
+on hosted Supabase with `42501: permission denied to set parameter` — hosted
+Postgres doesn't grant permission to set arbitrary custom GUCs, only self-managed
+or local Postgres does. Two changes, put to the user rather than guessed:
+- **The auth value moved to Supabase Vault**, the platform's actual supported
+  mechanism for this: `select vault.create_secret('<value>', 'digest_cron_secret')`,
+  read back in the cron SQL via `(select decrypted_secret from
+  vault.decrypted_secrets where name = 'digest_cron_secret')`. Same bearer-token
+  shape as the pin, different storage mechanism — a platform limitation, not a
+  new design decision.
+- **`daily-digest/index.ts` now actually checks the `Authorization` header**
+  against an Edge Function secret `DIGEST_CRON_SECRET` (the same value stored in
+  Vault), 401ing on a mismatch. This *is* a small new addition: `config.toml` sets
+  `verify_jwt = false` for this function (Telegram calls the other function with no
+  Supabase JWT at all, same reasoning as D4), which means Supabase's own gateway
+  was never going to validate that bearer token either way — so before this,
+  deployed as originally pinned, `daily-digest` would have been a fully public,
+  unauthenticated endpoint. Mirrors D4's shape (compare a header to a secret,
+  reject with no body on mismatch) rather than inventing a new pattern.
+
 **D18.** Backoff: before sending, look at the two most recent `deliveries`. If every
 `delivery_item` across both is still `status = 'unread'`, skip today entirely. Write
 no delivery row. Send no message.

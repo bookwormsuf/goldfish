@@ -8,6 +8,7 @@ import { sendArticleMessage } from "../_shared/browse.ts";
 import { copy } from "../_shared/copy.ts";
 
 const ALLOWED_CHAT_ID = Deno.env.get("ALLOWED_CHAT_ID")!;
+const DIGEST_CRON_SECRET = Deno.env.get("DIGEST_CRON_SECRET");
 
 // D18: if every delivery_item across the two most recent deliveries is still
 // unread, skip today entirely. Fewer than two deliveries on record means
@@ -125,9 +126,21 @@ async function runDigest() {
   return { sent: selected.length, deliveryWritten: true };
 }
 
+// Step 9: this function is deployed with verify_jwt = false (config.toml) —
+// Telegram's webhook has an equivalent header check (D4), but this endpoint
+// had none, meaning the Authorization: Bearer <key> the pinned cron SQL
+// sends was never actually verified by anything once deployed. Same
+// bearer-token shape, checked against DIGEST_CRON_SECRET (an Edge Function
+// secret, mirrored into Supabase Vault so 0003_cron.sql's SQL can read it).
+// See SPEC.md's addendum after D17.
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return new Response(null, { status: 405 });
+  }
+
+  const auth = req.headers.get("Authorization");
+  if (auth !== `Bearer ${DIGEST_CRON_SECRET}`) {
+    return new Response(null, { status: 401 });
   }
 
   const result = await runDigest();
