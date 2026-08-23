@@ -122,6 +122,16 @@ via `console.log`, and produces no reply. Never tell an unknown chat the bot exi
 `'00000000-0000-0000-0000-000000000001'`. No auth, no RLS policies in v1. Functions
 use the service role key.
 
+*Added during Step 9 build*: Supabase's legacy JWT-based `service_role` key can't be
+individually rotated, only disabled project-wide — discovered after a CLI command
+accidentally printed the goldfish project's legacy `service_role` key into a session
+transcript (see STATUS.md's Step 9 build log for the full account). Rather than leave
+it exposed, disabled legacy API keys entirely and migrated `_shared/db.ts`'s
+`getServiceClient()` from `SUPABASE_SERVICE_ROLE_KEY` to `SUPABASE_SECRET_KEYS`
+(the new key system's auto-injected JSON dictionary, `JSON.parse(...).default`).
+Same full-access, bypasses-RLS key D6 calls for — a platform migration, not a new
+design decision.
+
 ### Capture
 
 **D7.** URL normalisation for `url_key`, in this exact order:
