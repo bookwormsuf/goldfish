@@ -34,7 +34,7 @@ Do not propose these. They were considered and rejected:
 - A Telegram bot framework. Raw `fetch` only.
 - Backfilling from other read-later apps.
 - Resurfacing skipped articles.
-- Re-tagging existing articles when a new topic is added.
+- Re-tagging existing articles when a new tag is added.
 
 ## Commands the user must run themselves
 

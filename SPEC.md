@@ -24,8 +24,8 @@ write your own notes, search them later.
 
 ## 1. Scope
 
-**In scope (v1):** link capture, metadata fetch, LLM topic assignment, daily digest
-of three, read/skip tracking, manual notes, topic browsing, full-text search, PDF
+**In scope (v1):** link capture, metadata fetch, LLM tag assignment, daily digest
+of three, read/skip tracking, manual notes, tag browsing, full-text search, PDF
 storage.
 
 **Explicitly deferred:** note embeddings and vector search (step 9), second-brain
@@ -46,7 +46,7 @@ own words only.
 | Scheduling | Supabase Cron (`pg_cron` + `pg_net`) |
 | File storage | Supabase Storage, private bucket `papers` |
 | Telegram client | Raw `fetch`. **No framework.** No grammY. |
-| Topic assignment | Anthropic API, `claude-haiku-4-5-20251001`, raw `fetch` |
+| Tag assignment | Anthropic API, `claude-haiku-4-5-20251001`, raw `fetch` |
 | Migrations | Supabase CLI, files in `supabase/migrations/` |
 
 ### Repo layout
@@ -59,6 +59,8 @@ goldfish/
       0001_init.sql
       0002_search.sql
       0003_cron.sql
+      0004_storage.sql
+      0005_rename_tags.sql
     functions/
       telegram-webhook/index.ts
       daily-digest/index.ts
@@ -66,7 +68,8 @@ goldfish/
         telegram.ts        # Bot API wrappers
         db.ts              # Supabase client + queries
         metadata.ts        # URL normalisation + page metadata fetch
-        topics.ts          # Haiku topic assignment
+        tags.ts            # Haiku tag assignment
+        browse.ts          # Search/browse, article message rendering
         copy.ts            # All user-facing strings
   test/
     fixtures/              # Sample Telegram update payloads
@@ -87,7 +90,7 @@ injected automatically and must not be set manually.
 | `TELEGRAM_BOT_TOKEN` | Bot API auth |
 | `TELEGRAM_SECRET_TOKEN` | Webhook header secret, any random 32+ char string |
 | `ALLOWED_CHAT_ID` | The only chat the bot responds to |
-| `ANTHROPIC_API_KEY` | Topic assignment |
+| `ANTHROPIC_API_KEY` | Tag assignment |
 
 ---
 
@@ -99,8 +102,8 @@ injected automatically and must not be set manually.
 `sendMessage`, `sendDocument`, `answerCallbackQuery`, `editMessageReplyMarkup`,
 `setMessageReaction`, `getFile`. No Bot API framework.
 
-*Added during Step 7 build*: `editMessageText` was also needed, to turn a `/topics`
-menu message into a paginated topic-list page in place (D30) — `editMessageReplyMarkup`
+*Added during Step 7 build*: `editMessageText` was also needed, to turn a `/tags`
+menu message into a paginated tag-list page in place (D30) — `editMessageReplyMarkup`
 only edits the keyboard, not the text. A `/review` pass caught that this 7th method
 was added without pinning it here the way every other gap in this build was; noting
 it now. The list above is otherwise still closed.
@@ -166,18 +169,18 @@ confirmation message per article.
 **D11.** Duplicate detection is on `(user_id, url_key)`. On a hit, the bot replies
 with the original save date and does not insert. PDFs are never deduplicated.
 
-### Topics
+### Tags
 
-**D12.** Topics are assigned by `claude-haiku-4-5-20251001` at save time, from the
-current contents of the `topics` table. Input is the title and description only.
+**D12.** Tags are assigned by `claude-haiku-4-5-20251001` at save time, from the
+current contents of the `tags` table. Input is the title and description only.
 
 **D13.** The model is forced into structured output with a tool definition. Do not
 parse prose, do not ask for JSON in the prompt. Tool schema:
 
 ```json
 {
-  "name": "assign_topics",
-  "description": "Assign 1-3 topics to an article.",
+  "name": "assign_tags",
+  "description": "Assign 1-3 tags to an article.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -193,31 +196,31 @@ parse prose, do not ask for JSON in the prompt. Tool schema:
 }
 ```
 
-Call with `tool_choice: {"type": "tool", "name": "assign_topics"}`, `max_tokens: 200`.
+Call with `tool_choice: {"type": "tool", "name": "assign_tags"}`, `max_tokens: 200`.
 
-**D14.** Any returned slug not present in the `topics` table is discarded. If nothing
-survives, or the call fails for any reason, assign `other`. **Topic assignment must
+**D14.** Any returned slug not present in the `tags` table is discarded. If nothing
+survives, or the call fails for any reason, assign `other`. **Tag assignment must
 never block or fail a save.**
 
-**D15.** Topics added later via `/topic` are forward-only. Never re-tag existing
+**D15.** Tags added later via `/tag` are forward-only. Never re-tag existing
 articles. No `/retag` command in v1.
 
 *Added during Step 6 build*: two mechanical points needed to actually run D26's
-`/topic ` branch and D12's assignment, neither of which SPEC.md pinned a shape for:
-- **Slug/label derivation for a user-typed `/topic <name>`.** The slug is
+`/tag ` branch and D12's assignment, neither of which SPEC.md pinned a shape for:
+- **Slug/label derivation for a user-typed `/tag <name>`.** The slug is
   kebab-cased from the typed text (lowercase, non-alphanumerics collapsed to single
   hyphens) for matching against `unique(user_id, slug)`; the label is title-cased
   from the same text rather than preserving whatever casing was typed, so
-  user-created topics read consistently next to the fixed seed list. Retyping the
+  user-created tags read consistently next to the fixed seed list. Retyping the
   same name (any casing) matches the existing row by slug instead of creating a
   duplicate.
-- **Topic assignment runs on every saved link, fetch_ok or not.** D12 doesn't
+- **Tag assignment runs on every saved link, fetch_ok or not.** D12 doesn't
   condition assignment on fetch success, so an unfetchable article (title = bare
   hostname, no description) still goes through Haiku — it just tends to land on
   `other` per D14, which is the correct fallback outcome, not a bug. Multiple
-  assigned labels in `copy.saved`'s topics string are joined with `", "`.
+  assigned labels in `copy.saved`'s tags string are joined with `", "`.
 
-**D16.** Seed topics, exactly these 15:
+**D16.** Seed tags, exactly these 15:
 
 ```
 design-systems      Design Systems
@@ -326,7 +329,7 @@ as a separate message rather than folded into the first article's text.
 **D23.** `callback_data` encodings, exactly:
 - `r:<article_id>` — mark read
 - `s:<article_id>` — mark skipped
-- `t:<topic_id>:<offset>` — browse topic page
+- `t:<tag_id>:<offset>` — browse tag page
 
 **D24.** On read/skip: update `status` and `resolved_at = now()`, call
 `answerCallbackQuery` with text `Marked read` or `Marked skipped`, then
@@ -346,7 +349,7 @@ new decision — both are direct consequences of decisions already pinned:
   (`... where status = 'unread'`), so a retried or double-tapped callback is a no-op
   rather than a second write — `editMessageReplyMarkup` still runs on a no-op so a
   stale keyboard gets cleaned up either way.
-- `t:<topic_id>:<offset>` (topic browsing) has no handler yet — topics don't exist
+- `t:<tag_id>:<offset>` (tag browsing) has no handler yet — tags don't exist
   until Step 6/7. Until then any callback_data that isn't `r:`, `s:`, or `noop` is
   acknowledged with an empty `answerCallbackQuery` and logged, not crashed on.
 
@@ -354,9 +357,9 @@ new decision — both are direct consequences of decisions already pinned:
 `(chat_id, telegram_message_id)`:
 - `kind = 'article'`, plain text → insert a note on that article, react ✍️ via
   `setMessageReaction`, send no reply message.
-- `kind = 'article'`, text starting `/topic ` → create the topic if new, tag that
+- `kind = 'article'`, text starting `/tag ` → create the tag if new, tag that
   article, reply with confirmation.
-- `kind = 'topic_list'`, text is a bare integer → send that item as a full article
+- `kind = 'tag_list'`, text is a bare integer → send that item as a full article
   message with buttons, recorded as a new `sent_messages` row with `kind='article'`.
 - No matching row → ignore entirely.
 
@@ -365,10 +368,10 @@ summarising, no truncation.
 
 *Added during Step 5 build*: per the Step 5 build-order scope (SPEC.md section 7),
 only D26's first bullet is implemented now — a reply to a `kind='article'` message
-whose text doesn't start with `/topic ` inserts a note and reacts. The other two D26
+whose text doesn't start with `/tag ` inserts a note and reacts. The other two D26
 branches are left alone rather than half-built, since both depend on things that
-don't exist yet: `/topic `-prefixed replies need topic creation (Step 6), and
-`kind='topic_list'` numeric resolution needs topic browsing to exist at all (Step 7).
+don't exist yet: `/tag `-prefixed replies need tag creation (Step 6), and
+`kind='tag_list'` numeric resolution needs tag browsing to exist at all (Step 7).
 A reply matching either of those is currently a silent no-op, same as an unmatched
 `sent_messages` lookup — not a bug, just not built yet.
 
@@ -379,16 +382,16 @@ Ranking is `greatest(article_rank, note_rank * 1.5)` using `ts_rank`, top 5. Que
 parsing uses `websearch_to_tsquery('english', q)`. Each result is sent as its own
 article message with buttons, recorded in `sent_messages` with `kind='article'`.
 
-**D29.** `/topics` sends one message whose inline keyboard has one button per topic,
+**D29.** `/tags` sends one message whose inline keyboard has one button per tag,
 labelled `<label> (<count>)`, counting all articles regardless of status. Two buttons
-per row. Topics with zero articles are still shown.
+per row. Tags with zero articles are still shown.
 
-**D30.** Tapping a topic button edits that same message into page 1 of the topic list.
+**D30.** Tapping a tag button edits that same message into page 1 of the tag list.
 Ordering: **unread before read/skipped, then `saved_at` descending within each group.**
 10 per page. Titles are markdown links. Each line shows the status word. `◀ Prev` and
 `Next ▶` buttons appear only when there is a page in that direction. The message is
-recorded in `sent_messages` with `kind='topic_list'` and a `payload` of
-`{"topic_id": n, "offset": n, "article_ids": [...]}` so a numeric reply can resolve.
+recorded in `sent_messages` with `kind='tag_list'` and a `payload` of
+`{"tag_id": n, "offset": n, "article_ids": [...]}` so a numeric reply can resolve.
 
 *Added during Step 7 build, corrected after the Step 7 review*: implementation
 notes, none of them new decisions:
@@ -405,11 +408,11 @@ notes, none of them new decisions:
   noting it here now, same as that one was.
 - **D30's ordering (unread before read/skipped, then `saved_at` desc) runs
   client-side**, not in SQL. PostgREST's `.order()` only takes column names, not a
-  `CASE` expression, so `_shared/browse.ts` fetches a topic's full article list and
+  `CASE` expression, so `_shared/browse.ts` fetches a tag's full article list and
   sorts in JS before slicing the page. Fine at single-user scale, and avoids needing
   another raw Postgres connection the way D19's query did.
-- **Topic counts in the `/topics` menu are also computed client-side**: fetch
-  `article_topics.topic_id` and count in JS rather than betting on a specific
+- **Tag counts in the `/tags` menu are also computed client-side**: fetch
+  `article_tags.tag_id` and count in JS rather than betting on a specific
   PostgREST version supporting an embedded `count()` aggregate.
 - **Markdown link titles get a minimal escape** (`[` and `]` only) before being
   embedded as `[title](url)` — enough to stop a title containing a literal bracket
@@ -444,11 +447,11 @@ for, put to the user where it was a real design choice rather than guessed:
   originally-scoped work needed; a fourth is a mechanical consequence of D31
   needing a bucket to exist, not a new design decision.
 - **Rendering a PDF via search/browse** (`sendArticleMessage`,
-  `renderTopicListMessage`): D34 says PDFs are "searchable and browsable" but
-  neither `articleMessageHtml` nor the topic-list markdown-link line has a url
+  `renderTagListMessage`): D34 says PDFs are "searchable and browsable" but
+  neither `articleMessageHtml` nor the tag-list markdown-link line has a url
   to work with for a PDF row. Put to the user: PDFs render as plain text (a
   `(PDF)` marker in place of the url line; the title as plain text instead of
-  a markdown link in topic lists) rather than re-sending the file via
+  a markdown link in tag lists) rather than re-sending the file via
   `sendDocument`. `sendDocument` stays unimplemented — D1's method list is a
   closed set of what's *allowed*, not a mandate that all six exist.
 - **Non-PDF documents** (any Telegram document whose `mime_type` isn't
@@ -456,11 +459,11 @@ for, put to the user where it was a real design choice rather than guessed:
   omits `mime_type`) are a silent no-op — the input table only pins behaviour
   for "a PDF document," and no other document type has a designed behaviour
   yet, same footing as the other unmatched-input no-ops in section 5.
-- **Topic assignment (D12) runs for PDFs too**, using the resolved title and
+- **Tag assignment (D12) runs for PDFs too**, using the resolved title and
   a null description — D12 doesn't scope itself to `kind = 'link'`, and
   `copy.savedPdf` just doesn't surface the labels in the confirmation the way
   `copy.saved` does for links. The assignment still happens; it's browsable
-  via `/topics` afterward.
+  via `/tags` afterward.
 
 ### Housekeeping
 
@@ -494,9 +497,15 @@ failure.
 
 ### `0001_init.sql`
 
+*Note: shown here in its current, renamed shape (`tags`/`article_tags`/`tag_id`) —
+this is what a fresh build should create. The actual file on disk still literally
+reads `topics`/`article_topics`/`topic_id`, since it was already applied to
+production before the rename; `0005_rename_tags.sql` performs the live rename
+instead of editing an already-applied migration. See the addendum after D6.*
+
 ```sql
--- Topics: user-controlled, extendable via /topic
-create table topics (
+-- Tags: user-controlled, extendable via /tag
+create table tags (
   id         bigint generated always as identity primary key,
   user_id    uuid not null default '00000000-0000-0000-0000-000000000001',
   slug       text not null,
@@ -535,14 +544,14 @@ create unique index articles_user_url_key_uniq
 create index articles_search_idx on articles using gin (search_vector);
 create index articles_pool_idx on articles (user_id, status, kind, saved_at desc);
 
-create table article_topics (
+create table article_tags (
   article_id  bigint not null references articles(id) on delete cascade,
-  topic_id    bigint not null references topics(id) on delete cascade,
+  tag_id      bigint not null references tags(id) on delete cascade,
   assigned_by text not null default 'llm' check (assigned_by in ('llm', 'user')),
-  primary key (article_id, topic_id)
+  primary key (article_id, tag_id)
 );
 
-create index article_topics_topic_idx on article_topics (topic_id);
+create index article_tags_tag_idx on article_tags (tag_id);
 
 create table notes (
   id                  bigint generated always as identity primary key,
@@ -581,7 +590,7 @@ create table sent_messages (
   user_id             uuid not null default '00000000-0000-0000-0000-000000000001',
   chat_id             bigint not null,
   telegram_message_id bigint not null,
-  kind                text not null check (kind in ('article', 'topic_list')),
+  kind                text not null check (kind in ('article', 'tag_list')),
   article_id          bigint references articles(id) on delete cascade,
   payload             jsonb,
   created_at          timestamptz not null default now(),
@@ -594,7 +603,7 @@ create table processed_updates (
   received_at timestamptz not null default now()
 );
 
-insert into topics (slug, label) values
+insert into tags (slug, label) values
   ('design-systems',    'Design Systems'),
   ('research-methods',  'Research Methods'),
   ('product-design',    'Product Design'),
@@ -723,17 +732,17 @@ Every message the bot can receive. No other behaviour exists.
 | Message with 1+ URLs | Save each in order. One confirmation per article. (D10) |
 | Message with a PDF document | Save as `kind='pdf'`. (D31-D33) |
 | Reply to an `article` message, plain text | Insert note. React ✍️. No reply message. (D26) |
-| Reply to an `article` message, `/topic <name>` | Create topic if new, tag article, confirm. |
-| Reply to a `topic_list` message, a bare number | Send that article as a full message with buttons. |
+| Reply to an `article` message, `/tag <name>` | Create tag if new, tag article, confirm. |
+| Reply to a `tag_list` message, a bare number | Send that article as a full message with buttons. |
 | `/search <query>` | Top 5, each as its own article message. (D28) |
-| `/topics` | One message, topic buttons with counts. (D29) |
+| `/tags` | One message, tag buttons with counts. (D29) |
 | `/stats` | Unread count, read count, saves in the last 7 days. |
 | `/help` | The command list. |
 | Plain text, no URL, not a reply | The nudge string. |
 | Reply to a message not in `sent_messages` | Ignore entirely. |
 | Any message from a chat ID ≠ `ALLOWED_CHAT_ID` | `200`, log, no reply. (D5) |
 | Callback `r:` / `s:` | Mark read/skipped, edit keyboard. (D24) |
-| Callback `t:` | Render topic page, edit message. (D30) |
+| Callback `t:` | Render tag page, edit message. (D30) |
 | Callback `noop` | Empty `answerCallbackQuery`. Nothing else. |
 
 ---
@@ -746,7 +755,7 @@ is not listed, stop and ask.
 
 ```ts
 export const copy = {
-  saved: (title: string, topics: string) => `Saved · ${title}\n${topics}`,
+  saved: (title: string, tags: string) => `Saved · ${title}\n${tags}`,
 
   savedUnfetchable: (title: string) =>
     `Couldn't read that page, saved the link anyway.\n${title}\n(unfetchable)`,
@@ -767,18 +776,18 @@ export const copy = {
 
   nudge: () => `Send me a link, or reply to an article to add a note.`,
 
-  topicAdded: (label: string, title: string) => `Tagged ${title} · ${label}`,
+  tagAdded: (label: string, title: string) => `Tagged ${title} · ${label}`,
 
   searchEmpty: (q: string) => `Nothing for "${q}".`,
 
-  topicsHeader: () => `Topics`,
+  tagsHeader: () => `Tags`,
 
-  topicListHeader: (label: string, count: number) =>
+  tagListHeader: (label: string, count: number) =>
     `${label} · ${count} article${count === 1 ? '' : 's'}`,
 
-  topicListFooter: () => `Reply with a number to open one.`,
+  tagListFooter: () => `Reply with a number to open one.`,
 
-  topicListEmpty: (label: string) => `Nothing in ${label} yet.`,
+  tagListEmpty: (label: string) => `Nothing in ${label} yet.`,
 
   stats: (unread: number, read: number, week: number) =>
     `${unread} unread · ${read} read · ${week} saved this week`,
@@ -786,8 +795,8 @@ export const copy = {
   help: () =>
     `Send a link to save it.\n` +
     `Reply to an article to add a note.\n` +
-    `Reply /topic <name> to tag it.\n\n` +
-    `/search <query>\n/topics\n/stats`,
+    `Reply /tag <name> to tag it.\n\n` +
+    `/search <query>\n/tags\n/stats`,
 
   markedRead: () => `Marked read`,
   markedSkipped: () => `Marked skipped`,
@@ -807,7 +816,7 @@ used everywhere:
 <b>{title}</b>
 {description}
 
-{topic labels, comma separated}
+{tag labels, comma separated}
 {url}
 ```
 
@@ -825,7 +834,7 @@ pass with pasted output.
 
 `supabase init`, migration `0001_init.sql`, `telegram-webhook` function handling only:
 secret header check, chat ID allowlist, `update_id` dedup, URL extraction, insert with
-title from the hostname. No metadata fetch, no topics.
+title from the hostname. No metadata fetch, no tags.
 
 **Checks:** `supabase db reset` applies cleanly. `curl` with a fixture update payload
 returns 200 and inserts a row. A second `curl` with the same `update_id` inserts
@@ -866,22 +875,22 @@ Reply resolution through `sent_messages` (D26), note insert, ✍️ reaction (D2
 **Checks:** a reply payload targeting a known message inserts a note linked to the
 right article. A reply targeting an unknown message inserts nothing and sends nothing.
 
-### Step 6 — Topics
+### Step 6 — Tags
 
-`_shared/topics.ts`, Haiku with forced tool output (D13), slug validation and `other`
-fallback (D14), `/topic` command (D15).
+`_shared/tags.ts`, Haiku with forced tool output (D13), slug validation and `other`
+fallback (D14), `/tag` command (D15).
 
-**Checks:** save three articles on different subjects and paste the assigned topics.
+**Checks:** save three articles on different subjects and paste the assigned tags.
 Simulate an API failure (bad key) and show the article still saves with `other`.
 Simulate a hallucinated slug and show it is discarded.
 
 ### Step 7 — Search and browse
 
-`0002_search.sql`, `/search` (D28), `/topics` (D29), topic pages with pagination
+`0002_search.sql`, `/search` (D28), `/tags` (D29), tag pages with pagination
 (D30), numeric reply resolution.
 
 **Checks:** search a word that appears only in a note and show the article returned.
-Search a word only in a title and show it returned. Browse a topic with 12+ articles
+Search a word only in a title and show it returned. Browse a tag with 12+ articles
 and show page 2 works and ordering puts unread first.
 
 ### Step 8 — PDFs

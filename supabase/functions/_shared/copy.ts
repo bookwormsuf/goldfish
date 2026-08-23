@@ -2,7 +2,7 @@
 // Verbatim from SPEC.md section 6 — do not invent additional strings.
 
 export const copy = {
-  saved: (title: string, topics: string) => `Saved · ${title}\n${topics}`,
+  saved: (title: string, tags: string) => `Saved · ${title}\n${tags}`,
 
   savedUnfetchable: (title: string) =>
     `Couldn't read that page, saved the link anyway.\n${title}\n(unfetchable)`,
@@ -23,18 +23,18 @@ export const copy = {
 
   nudge: () => `Send me a link, or reply to an article to add a note.`,
 
-  topicAdded: (label: string, title: string) => `Tagged ${title} · ${label}`,
+  tagAdded: (label: string, title: string) => `Tagged ${title} · ${label}`,
 
   searchEmpty: (q: string) => `Nothing for "${q}".`,
 
-  topicsHeader: () => `Topics`,
+  tagsHeader: () => `Tags`,
 
-  topicListHeader: (label: string, count: number) =>
+  tagListHeader: (label: string, count: number) =>
     `${label} · ${count} article${count === 1 ? "" : "s"}`,
 
-  topicListFooter: () => `Reply with a number to open one.`,
+  tagListFooter: () => `Reply with a number to open one.`,
 
-  topicListEmpty: (label: string) => `Nothing in ${label} yet.`,
+  tagListEmpty: (label: string) => `Nothing in ${label} yet.`,
 
   stats: (unread: number, read: number, week: number) =>
     `${unread} unread · ${read} read · ${week} saved this week`,
@@ -42,8 +42,8 @@ export const copy = {
   help: () =>
     `Send a link to save it.\n` +
     `Reply to an article to add a note.\n` +
-    `Reply /topic <name> to tag it.\n\n` +
-    `/search <query>\n/topics\n/stats`,
+    `Reply /tag <name> to tag it.\n\n` +
+    `/search <query>\n/tags\n/stats`,
 
   markedRead: () => `Marked read`,
   markedSkipped: () => `Marked skipped`,
@@ -65,7 +65,7 @@ function escapeHtml(s: string): string {
 export function articleMessageHtml(article: {
   title: string;
   description: string | null;
-  topics: string;
+  tags: string;
   url: string | null;
 }): string {
   const lines = [`<b>${escapeHtml(article.title)}</b>`];
@@ -73,7 +73,7 @@ export function articleMessageHtml(article: {
     lines.push(escapeHtml(article.description));
   }
   lines.push("");
-  lines.push(escapeHtml(article.topics));
+  lines.push(escapeHtml(article.tags));
   // Step 8: PDFs have no url (SPEC.md addendum after D34).
   lines.push(article.url ? escapeHtml(article.url) : "(PDF)");
   return lines.join("\n");

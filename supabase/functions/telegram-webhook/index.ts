@@ -9,8 +9,8 @@ import {
   sendMessage,
   setMessageReaction,
 } from "../_shared/telegram.ts";
-import { assignTopics, findOrCreateTopic } from "../_shared/topics.ts";
-import { fetchTopicMenu, fetchTopicPage, renderTopicListMessage, sendArticleMessage } from "../_shared/browse.ts";
+import { assignTags, findOrCreateTag } from "../_shared/tags.ts";
+import { fetchTagMenu, fetchTagPage, renderTagListMessage, sendArticleMessage } from "../_shared/browse.ts";
 import { copy } from "../_shared/copy.ts";
 
 const TELEGRAM_SECRET_TOKEN = Deno.env.get("TELEGRAM_SECRET_TOKEN");
@@ -76,19 +76,19 @@ async function saveLink(db: ReturnType<typeof getServiceClient>, chatId: string,
   // D12: assignment runs regardless of fetch_ok — a bare-hostname title with
   // no description just tends to land on `other` (D14's fallback), it isn't
   // excluded outright.
-  const topics = await assignTopics(db, meta.title, meta.description);
-  if (topics.length > 0) {
-    const { error: tagError } = await db.from("article_topics").insert(
-      topics.map((t) => ({ article_id: inserted.id, topic_id: t.id, assigned_by: "llm" })),
+  const tags = await assignTags(db, meta.title, meta.description);
+  if (tags.length > 0) {
+    const { error: tagError } = await db.from("article_tags").insert(
+      tags.map((t) => ({ article_id: inserted.id, tag_id: t.id, assigned_by: "llm" })),
     );
     if (tagError) {
-      console.log("article_topics insert failed", tagError.code, tagError.message);
+      console.log("article_tags insert failed", tagError.code, tagError.message);
     }
   }
-  const topicLabels = topics.map((t) => t.label).join(", ");
+  const tagLabels = tags.map((t) => t.label).join(", ");
 
   if (meta.fetchOk) {
-    await sendMessage(chatId, copy.saved(meta.title, topicLabels));
+    await sendMessage(chatId, copy.saved(meta.title, tagLabels));
   } else {
     await sendMessage(chatId, copy.savedUnfetchable(meta.title));
   }
@@ -137,13 +137,13 @@ async function savePdf(
   }
 
   // D12: assignment runs the same as a link save, title + null description.
-  const topics = await assignTopics(db, title, null);
-  if (topics.length > 0) {
-    const { error: tagError } = await db.from("article_topics").insert(
-      topics.map((t) => ({ article_id: inserted.id, topic_id: t.id, assigned_by: "llm" })),
+  const tags = await assignTags(db, title, null);
+  if (tags.length > 0) {
+    const { error: tagError } = await db.from("article_tags").insert(
+      tags.map((t) => ({ article_id: inserted.id, tag_id: t.id, assigned_by: "llm" })),
     );
     if (tagError) {
-      console.log("article_topics insert failed", tagError.code, tagError.message);
+      console.log("article_tags insert failed", tagError.code, tagError.message);
     }
   }
 
@@ -180,25 +180,25 @@ async function savePdf(
   return true;
 }
 
-// D30: tapping a topic button (or Prev/Next) edits the same message into
+// D30: tapping a tag button (or Prev/Next) edits the same message into
 // the requested page and (re)records it in sent_messages with the new
 // payload, so a later numeric reply always resolves against what's on
 // screen right now.
-async function handleTopicPageCallback(
+async function handleTagPageCallback(
   db: ReturnType<typeof getServiceClient>,
   chatId: string,
   messageId: number,
-  topicId: number,
+  tagId: number,
   offset: number,
   callbackQueryId: string,
 ) {
-  const page = await fetchTopicPage(db, topicId, offset);
+  const page = await fetchTagPage(db, tagId, offset);
   if (!page) {
     await answerCallbackQuery(callbackQueryId);
     return;
   }
 
-  const { text, keyboard } = renderTopicListMessage(topicId, offset, page);
+  const { text, keyboard } = renderTagListMessage(tagId, offset, page);
   await editMessageText(chatId, messageId, text, { parseMode: "Markdown", replyMarkup: keyboard });
   await answerCallbackQuery(callbackQueryId);
 
@@ -208,8 +208,8 @@ async function handleTopicPageCallback(
       user_id: DEFAULT_USER_ID,
       chat_id: Number(chatId),
       telegram_message_id: messageId,
-      kind: "topic_list",
-      payload: { topic_id: topicId, offset, article_ids: articleIds },
+      kind: "tag_list",
+      payload: { tag_id: tagId, offset, article_ids: articleIds },
     },
     { onConflict: "chat_id,telegram_message_id" },
   );
@@ -242,10 +242,10 @@ async function processCallbackQuery(
     return;
   }
 
-  const topicMatch = data.match(/^t:(\d+):(\d+)$/);
-  if (topicMatch) {
-    const [, topicIdStr, offsetStr] = topicMatch;
-    await handleTopicPageCallback(db, chatId, messageId, Number(topicIdStr), Number(offsetStr), callbackQueryId);
+  const tagMatch = data.match(/^t:(\d+):(\d+)$/);
+  if (tagMatch) {
+    const [, tagIdStr, offsetStr] = tagMatch;
+    await handleTagPageCallback(db, chatId, messageId, Number(tagIdStr), Number(offsetStr), callbackQueryId);
     return;
   }
 
@@ -292,9 +292,9 @@ async function processCallbackQuery(
   }
 }
 
-// D26's `/topic ` branch: create the topic if new (D15, forward-only —
+// D26's `/tag ` branch: create the tag if new (D15, forward-only —
 // never re-tags older articles), tag this one article, confirm.
-async function tagArticleWithTopic(
+async function applyTagToArticle(
   db: ReturnType<typeof getServiceClient>,
   chatId: string,
   articleId: number,
@@ -305,29 +305,29 @@ async function tagArticleWithTopic(
     return;
   }
 
-  const topic = await findOrCreateTopic(db, rawName);
-  if (!topic) {
+  const tag = await findOrCreateTag(db, rawName);
+  if (!tag) {
     return;
   }
 
   const { error: tagError } = await db
-    .from("article_topics")
+    .from("article_tags")
     .upsert(
-      { article_id: articleId, topic_id: topic.id, assigned_by: "user" },
-      { onConflict: "article_id,topic_id" },
+      { article_id: articleId, tag_id: tag.id, assigned_by: "user" },
+      { onConflict: "article_id,tag_id" },
     );
   if (tagError) {
-    console.log("article_topics insert failed", tagError.code, tagError.message);
+    console.log("article_tags insert failed", tagError.code, tagError.message);
     return;
   }
 
-  await sendMessage(chatId, copy.topicAdded(topic.label, articleTitle));
+  await sendMessage(chatId, copy.tagAdded(tag.label, articleTitle));
 }
 
-// D26: `kind = 'topic_list'`, text is a bare integer → open that item as a
-// full article message. Any other text against a topic_list message (not a
+// D26: `kind = 'tag_list'`, text is a bare integer → open that item as a
+// full article message. Any other text against a tag_list message (not a
 // bare integer) is ignored — the input table only pins the numeric case.
-async function handleTopicListReply(
+async function handleTagListReply(
   db: ReturnType<typeof getServiceClient>,
   chatId: string,
   payload: unknown,
@@ -372,22 +372,22 @@ async function handleReply(
     return;
   }
 
-  if (sentMessage.kind === "topic_list") {
-    await handleTopicListReply(db, chatId, sentMessage.payload, text);
+  if (sentMessage.kind === "tag_list") {
+    await handleTagListReply(db, chatId, sentMessage.payload, text);
     return;
   }
   if (sentMessage.kind !== "article") {
     return;
   }
 
-  if (text.startsWith("/topic ")) {
+  if (text.startsWith("/tag ")) {
     const articleTitle = (sentMessage.articles as unknown as { title: string }).title;
-    await tagArticleWithTopic(
+    await applyTagToArticle(
       db,
       chatId,
       sentMessage.article_id,
       articleTitle,
-      text.slice("/topic ".length),
+      text.slice("/tag ".length),
     );
     return;
   }
@@ -429,9 +429,9 @@ async function handleSearch(db: ReturnType<typeof getServiceClient>, chatId: str
   }
 }
 
-// D29: one message, one button per topic, two per row, labelled with counts.
-async function handleTopicsCommand(db: ReturnType<typeof getServiceClient>, chatId: string) {
-  const menu = await fetchTopicMenu(db);
+// D29: one message, one button per tag, two per row, labelled with counts.
+async function handleTagsCommand(db: ReturnType<typeof getServiceClient>, chatId: string) {
+  const menu = await fetchTagMenu(db);
   const buttons = menu.map((t) => ({ text: `${t.label} (${t.count})`, callback_data: `t:${t.id}:0` }));
 
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
@@ -439,7 +439,7 @@ async function handleTopicsCommand(db: ReturnType<typeof getServiceClient>, chat
     rows.push(buttons.slice(i, i + 2));
   }
 
-  await sendMessage(chatId, copy.topicsHeader(), { replyMarkup: rows });
+  await sendMessage(chatId, copy.tagsHeader(), { replyMarkup: rows });
 }
 
 async function handleStats(db: ReturnType<typeof getServiceClient>, chatId: string) {
@@ -521,7 +521,7 @@ async function processUpdate(update: Record<string, unknown>) {
     return;
   }
 
-  // /search, /topics, /stats, /help aren't scoped to a specific numbered
+  // /search, /tags, /stats, /help aren't scoped to a specific numbered
   // build step in SPEC.md's build order, but they're fully pinned in the
   // input table (section 5) and share this step's command-dispatch code,
   // so they're completed here rather than left dangling.
@@ -529,8 +529,8 @@ async function processUpdate(update: Record<string, unknown>) {
     await handleSearch(db, chatId, text.slice("/search ".length));
     return;
   }
-  if (text === "/topics") {
-    await handleTopicsCommand(db, chatId);
+  if (text === "/tags") {
+    await handleTagsCommand(db, chatId);
     return;
   }
   if (text === "/stats") {

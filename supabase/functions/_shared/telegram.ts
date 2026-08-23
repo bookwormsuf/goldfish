@@ -69,7 +69,7 @@ export async function answerCallbackQuery(
   }
 }
 
-// D30: used to turn a /topics menu message into a topic list page in place.
+// D30: used to turn a /tags menu message into a tag list page in place.
 export async function editMessageText(
   chatId: number | string,
   messageId: number,

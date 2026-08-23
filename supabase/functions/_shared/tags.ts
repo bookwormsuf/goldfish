@@ -1,21 +1,23 @@
-// D12-D15: topic assignment via Haiku with forced tool output, slug
-// validation against the live topics table, and the `/topic` reply command.
+// D12-D15: tag assignment via Haiku with forced tool output, slug
+// validation against the live tags table, and the `/tag` reply command.
 
 import { getServiceClient } from "./db.ts";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const MODEL = "claude-haiku-4-5-20251001";
 
-export interface TopicRow {
+export interface TagRow {
   id: number;
   slug: string;
   label: string;
 }
 
-// D13, verbatim from SPEC.md. Do not ask for JSON in the prompt.
-const ASSIGN_TOPICS_TOOL = {
-  name: "assign_topics",
-  description: "Assign 1-3 topics to an article.",
+// D13, verbatim from SPEC.md except assign_topics -> assign_tags (part of
+// this rename, so the Haiku-facing schema doesn't say "topics" while
+// everything else says "tags"). Do not ask for JSON in the prompt.
+const ASSIGN_TAGS_TOOL = {
+  name: "assign_tags",
+  description: "Assign 1-3 tags to an article.",
   input_schema: {
     type: "object",
     properties: {
@@ -33,12 +35,12 @@ const ASSIGN_TOPICS_TOOL = {
 async function callHaiku(
   title: string,
   description: string | null,
-  topicRows: TopicRow[],
+  tagRows: TagRow[],
 ): Promise<string[]> {
-  const topicMenu = topicRows.map((t) => `${t.slug} - ${t.label}`).join("\n");
+  const tagMenu = tagRows.map((t) => `${t.slug} - ${t.label}`).join("\n");
   const userContent =
     `Title: ${title}\nDescription: ${description ?? "(none)"}\n\n` +
-    `Available topics:\n${topicMenu}`;
+    `Available tags:\n${tagMenu}`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -50,8 +52,8 @@ async function callHaiku(
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 200,
-      tools: [ASSIGN_TOPICS_TOOL],
-      tool_choice: { type: "tool", name: "assign_topics" },
+      tools: [ASSIGN_TAGS_TOOL],
+      tool_choice: { type: "tool", name: "assign_tags" },
       messages: [{ role: "user", content: userContent }],
     }),
   });
@@ -69,39 +71,39 @@ async function callHaiku(
 
   const input = toolUse.input as { slugs?: unknown };
   if (!Array.isArray(input.slugs)) {
-    throw new Error("assign_topics call had no slugs array");
+    throw new Error("assign_tags call had no slugs array");
   }
   return input.slugs as string[];
 }
 
 // D12, D14: never throws, never blocks a save. Falls back to `other` when
 // the call fails or every returned slug is invalid; returns [] only if the
-// topics table itself can't be read (nothing to fall back to).
-export async function assignTopics(
+// tags table itself can't be read (nothing to fall back to).
+export async function assignTags(
   db: ReturnType<typeof getServiceClient>,
   title: string,
   description: string | null,
-): Promise<TopicRow[]> {
-  const { data: topicRows, error: topicsError } = await db
-    .from("topics")
+): Promise<TagRow[]> {
+  const { data: tagRows, error: tagsError } = await db
+    .from("tags")
     .select("id, slug, label");
 
-  if (topicsError || !topicRows) {
-    console.log("topic list lookup failed", topicsError?.code, topicsError?.message);
+  if (tagsError || !tagRows) {
+    console.log("tag list lookup failed", tagsError?.code, tagsError?.message);
     return [];
   }
 
   let slugs: string[] = [];
   try {
-    slugs = await callHaiku(title, description, topicRows);
+    slugs = await callHaiku(title, description, tagRows);
   } catch (err) {
-    console.log("topic assignment call failed", String(err));
+    console.log("tag assignment call failed", String(err));
   }
 
-  const bySlug = new Map(topicRows.map((t) => [t.slug, t]));
+  const bySlug = new Map(tagRows.map((t) => [t.slug, t]));
   const matched = slugs
     .map((s) => bySlug.get(s))
-    .filter((t): t is TopicRow => t !== undefined);
+    .filter((t): t is TagRow => t !== undefined);
 
   if (matched.length > 0) {
     return matched;
@@ -112,11 +114,11 @@ export async function assignTopics(
 }
 
 // Step 6 addition: derives a slug/label pair from free text typed after
-// `/topic `. Not pinned in SPEC.md — kebab-cased slug for matching
-// (mirrors the seed topics' shape), title-cased label for display, so
-// user-created topics read consistently next to the fixed list rather than
+// `/tag `. Not pinned in SPEC.md — kebab-cased slug for matching
+// (mirrors the seed tags' shape), title-cased label for display, so
+// user-created tags read consistently next to the fixed list rather than
 // preserving whatever casing was typed.
-export function deriveTopicFields(name: string): { slug: string; label: string } | null {
+export function deriveTagFields(name: string): { slug: string; label: string } | null {
   const slug = name
     .toLowerCase()
     .trim()
@@ -138,23 +140,23 @@ export function deriveTopicFields(name: string): { slug: string; label: string }
 
 // D15: forward-only. Only ever called from the reply-to-tag path (D26),
 // never re-tags older articles.
-export async function findOrCreateTopic(
+export async function findOrCreateTag(
   db: ReturnType<typeof getServiceClient>,
   name: string,
-): Promise<TopicRow | null> {
-  const fields = deriveTopicFields(name);
+): Promise<TagRow | null> {
+  const fields = deriveTagFields(name);
   if (!fields) {
     return null;
   }
 
   const { data: existing, error: lookupError } = await db
-    .from("topics")
+    .from("tags")
     .select("id, slug, label")
     .eq("slug", fields.slug)
     .maybeSingle();
 
   if (lookupError) {
-    console.log("topic lookup failed", lookupError.code, lookupError.message);
+    console.log("tag lookup failed", lookupError.code, lookupError.message);
     return null;
   }
   if (existing) {
@@ -162,13 +164,13 @@ export async function findOrCreateTopic(
   }
 
   const { data: created, error: insertError } = await db
-    .from("topics")
+    .from("tags")
     .insert({ slug: fields.slug, label: fields.label })
     .select("id, slug, label")
     .single();
 
   if (insertError) {
-    console.log("topic insert failed", insertError.code, insertError.message);
+    console.log("tag insert failed", insertError.code, insertError.message);
     return null;
   }
   return created;

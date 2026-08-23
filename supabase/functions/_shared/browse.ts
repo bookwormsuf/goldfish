@@ -1,6 +1,6 @@
-// D29, D30: /topics menu, paginated topic-list pages, and the shared
+// D29, D30: /tags menu, paginated tag-list pages, and the shared
 // "send a full article message with buttons" used by search results and
-// numeric topic_list resolution.
+// numeric tag_list resolution.
 
 import { DEFAULT_USER_ID, getServiceClient } from "./db.ts";
 import { sendMessage } from "./telegram.ts";
@@ -8,42 +8,42 @@ import { articleMessageHtml, copy } from "./copy.ts";
 
 const PAGE_SIZE = 10;
 
-export interface TopicMenuItem {
+export interface TagMenuItem {
   id: number;
   label: string;
   count: number;
 }
 
 // D29: counts all articles regardless of status. Counted client-side rather
-// than via an embedded PostgREST aggregate — the topic count is small
+// than via an embedded PostgREST aggregate — the tag count is small
 // enough (single-user, a few thousand articles at most) that correctness
 // isn't worth betting on a specific PostgREST version's aggregate syntax.
-export async function fetchTopicMenu(
+export async function fetchTagMenu(
   db: ReturnType<typeof getServiceClient>,
-): Promise<TopicMenuItem[]> {
-  const { data: topics, error: topicsError } = await db
-    .from("topics")
+): Promise<TagMenuItem[]> {
+  const { data: tags, error: tagsError } = await db
+    .from("tags")
     .select("id, label")
     .order("id");
-  if (topicsError || !topics) {
-    console.log("topics lookup failed", topicsError?.code, topicsError?.message);
+  if (tagsError || !tags) {
+    console.log("tags lookup failed", tagsError?.code, tagsError?.message);
     return [];
   }
 
-  const { data: tags, error: tagsError } = await db.from("article_topics").select("topic_id");
-  if (tagsError) {
-    console.log("article_topics count lookup failed", tagsError.code, tagsError.message);
+  const { data: articleTags, error: articleTagsError } = await db.from("article_tags").select("tag_id");
+  if (articleTagsError) {
+    console.log("article_tags count lookup failed", articleTagsError.code, articleTagsError.message);
   }
 
   const counts = new Map<number, number>();
-  for (const row of tags ?? []) {
-    counts.set(row.topic_id, (counts.get(row.topic_id) ?? 0) + 1);
+  for (const row of articleTags ?? []) {
+    counts.set(row.tag_id, (counts.get(row.tag_id) ?? 0) + 1);
   }
 
-  return topics.map((t) => ({ id: t.id, label: t.label, count: counts.get(t.id) ?? 0 }));
+  return tags.map((t) => ({ id: t.id, label: t.label, count: counts.get(t.id) ?? 0 }));
 }
 
-interface TopicArticleRow {
+interface TagArticleRow {
   id: number;
   title: string;
   url: string | null;
@@ -51,7 +51,7 @@ interface TopicArticleRow {
   saved_at: string;
 }
 
-export interface TopicPage {
+export interface TagPage {
   label: string;
   total: number;
   items: Array<{ id: number; title: string; url: string | null; status: string }>;
@@ -61,35 +61,35 @@ export interface TopicPage {
 
 // D30: unread before read/skipped, then saved_at descending within each
 // group. PostgREST's .order() only takes column names, not a CASE
-// expression, so the sort happens client-side after fetching the topic's
+// expression, so the sort happens client-side after fetching the tag's
 // full article list — fine at single-user scale.
-export async function fetchTopicPage(
+export async function fetchTagPage(
   db: ReturnType<typeof getServiceClient>,
-  topicId: number,
+  tagId: number,
   offset: number,
-): Promise<TopicPage | null> {
-  const { data: topic, error: topicError } = await db
-    .from("topics")
+): Promise<TagPage | null> {
+  const { data: tag, error: tagError } = await db
+    .from("tags")
     .select("label")
-    .eq("id", topicId)
+    .eq("id", tagId)
     .maybeSingle();
-  if (topicError || !topic) {
-    console.log("topic lookup failed", topicError?.code, topicError?.message);
+  if (tagError || !tag) {
+    console.log("tag lookup failed", tagError?.code, tagError?.message);
     return null;
   }
 
   const { data: rows, error: rowsError } = await db
-    .from("article_topics")
+    .from("article_tags")
     .select("articles(id, title, url, status, saved_at)")
-    .eq("topic_id", topicId);
+    .eq("tag_id", tagId);
   if (rowsError || !rows) {
-    console.log("topic articles lookup failed", rowsError?.code, rowsError?.message);
+    console.log("tag articles lookup failed", rowsError?.code, rowsError?.message);
     return null;
   }
 
-  const articles = (rows as unknown as Array<{ articles: TopicArticleRow | null }>)
+  const articles = (rows as unknown as Array<{ articles: TagArticleRow | null }>)
     .map((r) => r.articles)
-    .filter((a): a is TopicArticleRow => a !== null);
+    .filter((a): a is TagArticleRow => a !== null);
 
   articles.sort((a, b) => {
     const aUnread = a.status === "unread" ? 0 : 1;
@@ -102,7 +102,7 @@ export async function fetchTopicPage(
   const page = articles.slice(offset, offset + PAGE_SIZE);
 
   return {
-    label: topic.label,
+    label: tag.label,
     total,
     items: page.map((a) => ({ id: a.id, title: a.title, url: a.url, status: a.status })),
     hasPrev: offset > 0,
@@ -120,16 +120,16 @@ function statusWord(status: string): string {
 
 // D30: titles are markdown links, one per numbered line. Prev/Next buttons
 // only appear when there's a page in that direction.
-export function renderTopicListMessage(
-  topicId: number,
+export function renderTagListMessage(
+  tagId: number,
   offset: number,
-  page: TopicPage,
+  page: TagPage,
 ): { text: string; keyboard: Array<Array<{ text: string; callback_data: string }>> } {
   if (page.total === 0) {
-    return { text: copy.topicListEmpty(page.label), keyboard: [] };
+    return { text: copy.tagListEmpty(page.label), keyboard: [] };
   }
 
-  const lines = [copy.topicListHeader(page.label, page.total), ""];
+  const lines = [copy.tagListHeader(page.label, page.total), ""];
   page.items.forEach((item, i) => {
     const num = offset + i + 1;
     // Step 8: PDFs have no url, so they render as plain text instead of a
@@ -140,20 +140,20 @@ export function renderTopicListMessage(
     lines.push(`${num}. ${titleText} — ${statusWord(item.status)}`);
   });
   lines.push("");
-  lines.push(copy.topicListFooter());
+  lines.push(copy.tagListFooter());
 
   const navRow: Array<{ text: string; callback_data: string }> = [];
   if (page.hasPrev) {
-    navRow.push({ text: copy.btnPrev(), callback_data: `t:${topicId}:${offset - PAGE_SIZE}` });
+    navRow.push({ text: copy.btnPrev(), callback_data: `t:${tagId}:${offset - PAGE_SIZE}` });
   }
   if (page.hasNext) {
-    navRow.push({ text: copy.btnNext(), callback_data: `t:${topicId}:${offset + PAGE_SIZE}` });
+    navRow.push({ text: copy.btnNext(), callback_data: `t:${tagId}:${offset + PAGE_SIZE}` });
   }
 
   return { text: lines.join("\n"), keyboard: navRow.length > 0 ? [navRow] : [] };
 }
 
-// Shared by /search (D28) and topic_list numeric resolution (D26): sends a
+// Shared by /search (D28) and tag_list numeric resolution (D26): sends a
 // full article message with Read/Skip buttons and records it in
 // sent_messages, same shape as a digest send.
 export async function sendArticleMessage(
@@ -172,21 +172,21 @@ export async function sendArticleMessage(
   }
 
   const { data: tagRows, error: tagsError } = await db
-    .from("article_topics")
-    .select("topics(label)")
+    .from("article_tags")
+    .select("tags(label)")
     .eq("article_id", articleId);
   if (tagsError) {
-    console.log("article topics lookup failed", tagsError.code, tagsError.message);
+    console.log("article tags lookup failed", tagsError.code, tagsError.message);
   }
-  const topicLabels = (tagRows as unknown as Array<{ topics: { label: string } | null }> | null ?? [])
-    .map((r) => r.topics?.label)
+  const tagLabels = (tagRows as unknown as Array<{ tags: { label: string } | null }> | null ?? [])
+    .map((r) => r.tags?.label)
     .filter((l): l is string => !!l)
     .join(", ");
 
   const text = articleMessageHtml({
     title: article.title,
     description: article.description,
-    topics: topicLabels,
+    tags: tagLabels,
     // Step 8: a PDF has no url. articleMessageHtml renders a "(PDF)" marker
     // in its place rather than resending the file (SPEC.md addendum after D34).
     url: article.kind === "pdf" ? null : article.url,

@@ -89,7 +89,7 @@ async function runDigest() {
   await sendMessage(ALLOWED_CHAT_ID, copy.digestHeader());
 
   // Same "send full article message with buttons, record sent_messages"
-  // helper used by search results and topic-list reopening (Step 7) — one
+  // helper used by search results and tag-list reopening (Step 7) — one
   // implementation of the article-message format instead of a second copy
   // that can (and did) drift out of sync with it.
   for (const article of selected) {
