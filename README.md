@@ -129,6 +129,17 @@ inline search mode.
 
 Built, deployed and running daily. It is a personal project shared as a reference, not a maintained product. Issues and pull requests may not get a reply.
 
+## Security
+
+Found something that shouldn't be public knowledge? Please report it privately through
+[GitHub's private vulnerability reporting](https://github.com/bookwormsuf/goldfish/security/advisories/new)
+rather than opening an issue.
+
+Worth knowing if you deploy your own: this runs with the Supabase service role key and no
+row-level security, so anything that can reach the functions can reach the whole database.
+The defences are the webhook's secret header, the chat allowlist, and the Vault-stored
+bearer token on the digest endpoint. See [Single-user by design](#single-user-by-design).
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
