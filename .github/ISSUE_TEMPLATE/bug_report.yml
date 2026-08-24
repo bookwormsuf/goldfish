@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in the setup or the running bot does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: this is a single-user project shared as a reference, not a
+        maintained product. Replies may be slow or may not come at all.
+
+        Most setup problems are covered by the README's **Running your own** section
+        and the reasoning behind almost every behaviour is pinned in `SPEC.md`.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where did it break?
+      options:
+        - Setup — cloning, linking, db push
+        - Setup — Vault secret or cron
+        - Setup — deploying functions or setWebhook
+        - Capture — saving a link
+        - Daily digest — selection, sending, backoff
+        - Buttons — Read / Skip
+        - Notes — replying to an article
+        - Search or tag browsing
+        - PDFs
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Local or hosted?
+      options:
+        - Hosted Supabase project
+        - Local stack (supabase start)
+        - Both
+    validations:
+      required: true
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: Supabase CLI version
+      description: "`supabase --version`"
+      placeholder: "2.x.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: >
+        Include the actual error. Function logs are in the Supabase dashboard under
+        Edge Functions. Please redact tokens, keys and your project ref.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I have read **Single-user by design** in the README
+          required: true
+        - label: I have removed any tokens, keys or project refs from the text above
+          required: true

@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Why does it work this way?
+    url: https://github.com/bookwormsuf/goldfish/blob/main/SPEC.md
+    about: 38 pinned decisions, written before any code, each with its reasoning. Most "why not X" questions are answered here, including the things that were deliberately rejected.
+
+  - name: Feature requests
+    url: https://github.com/bookwormsuf/goldfish/blob/main/README.md#deliberately-not-here
+    about: Not being taken. This is a finished personal project shared as a reference. Fork it and make it yours.
+
+  - name: Report a security issue privately
+    url: https://github.com/bookwormsuf/goldfish/security/advisories/new
+    about: Please do not open a public issue for anything security related.
