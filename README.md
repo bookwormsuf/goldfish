@@ -16,9 +16,8 @@ I also thought it would be fun try out and experiment with telegram bots and dat
 - **Daily digest.** At 08:00 SGT, three unread articles get sent out, one message each. Weighted random favouring older saves, never two from the same domain.
 - **Backoff.** If the last two digests went untouched, skip the send entirely.
 - **Read / Skip buttons.** One way. A skipped article never comes back.
-- **Notes.** Reply to an article message and your reply is saved as a note. Your words only. The bot never writes summaries for you.
-- **Search and browse.** `/search` covers titles, descriptions and your notes.
-  `/topics` browses by tag.
+- **Notes.** Reply to an article message and your reply is saved as a note. Your words only. The bot never writes summaries for you. Reply `/tag <name>` to tag it by hand.
+- **Search and browse.** `/search <query>` covers titles, descriptions and your notes. `/tags` browses by tag. `/stats` counts unread, read and saved this week. `/help` lists the lot.
 - **PDFs.** Stored in a private bucket, re-sendable, excluded from the daily feed.
 
 ## How it fits together
@@ -100,7 +99,7 @@ Change it for your own timezone.
 
 ## Making it yours
 
-- **Tags** are seeded at the bottom of `0001_init.sql` and read live from the database, so the LLM can only ever pick from that list. Edit the seed before your first push, or edit the table afterwards. Mine are design and engineering heavy; yours will not be.
+- **Tags** are seeded in `0001_init.sql`. The statement there reads `insert into topics`, because the table was only renamed to `tags` later in `0005`. Tags are read live from the database, so the LLM can only ever pick from that list. Edit the seed before your first push, or edit the table afterwards. Mine are design and engineering heavy; yours will not be.
 - **Every user-facing string** lives in `supabase/functions/_shared/copy.ts`.
 - **Digest size, weighting and backoff** are in `daily-digest/index.ts`, with the reasoning for each in SPEC.md.
 
